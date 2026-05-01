@@ -9,6 +9,8 @@ extern crate alloc;
 use core::panic::PanicInfo;
 extern crate log;
 
+pub use common::{BootInfo, FramebufferInfo, MemoryRegion, MemoryRegionKind};
+
 #[cfg(target_arch = "x86_64")]
 extern "C" fn init_task() -> ! {
     log::info!("init: Vibe Coded OS running");
@@ -26,48 +28,13 @@ mod mm;
 mod scheduler;
 mod syscalls;
 mod compat;
+mod drivers;
 
 #[cfg(target_arch = "x86_64")]
 use arch::x86_64 as arch_impl;
 
 #[cfg(target_arch = "aarch64")]
 use arch::aarch64 as arch_impl;
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub enum MemoryRegionKind {
-    Usable,
-    Reserved,
-    Bootloader,
-    Kernel,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct MemoryRegion {
-    pub base: u64,
-    pub length: u64,
-    pub kind: MemoryRegionKind,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct FramebufferInfo {
-    pub addr: u64,
-    pub width: u32,
-    pub height: u32,
-    pub pitch: u32,
-    pub bpp: u8,
-}
-
-#[repr(C)]
-pub struct BootInfo {
-    pub memory_map_ptr: *const MemoryRegion,
-    pub memory_map_len: usize,
-    pub framebuffer: *const FramebufferInfo,
-    pub rsdp: u64,
-    pub device_tree: u64,
-}
 
 #[no_mangle]
 pub extern "C" fn kernel_main(boot_info: *mut BootInfo) -> ! {
@@ -85,6 +52,12 @@ pub extern "C" fn kernel_main(boot_info: *mut BootInfo) -> ! {
     } else {
         unsafe { core::slice::from_raw_parts(bi.memory_map_ptr, bi.memory_map_len) }
     };
+
+    drivers::uart::init();
+    drivers::uart_logger::init();
+    log::info!("kernel_main entered");
+
+    unsafe { drivers::fbcon::init(&*bi.framebuffer); }
 
     arch_impl::init(unsafe { &mut *boot_info });
     mm::init(mem_map);
