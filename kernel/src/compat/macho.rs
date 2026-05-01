@@ -128,6 +128,14 @@ pub fn parse(data: &[u8]) -> Option<MachOImage> {
                 if off + mem::size_of::<SegmentCommand64>() <= data.len() {
                     let seg = unsafe { &*(data.as_ptr().add(off) as *const SegmentCommand64) };
                     img.segments.push((seg.vmaddr, seg.vmsize, seg.fileoff, seg.filesize));
+                    // Log a summary for this segment as soon as we parse it
+                    log::info!(
+                        "mach-o segment: vmaddr={:#x}, vmsize={:#x}, fileoff={:#x}, filesize={:#x}",
+                        seg.vmaddr,
+                        seg.vmsize,
+                        seg.fileoff,
+                        seg.filesize
+                    );
                     if seg.fileoff > 0 && seg.vmaddr < img.base_addr {
                         img.base_addr = seg.vmaddr;
                     }
@@ -158,11 +166,10 @@ pub fn parse(data: &[u8]) -> Option<MachOImage> {
         off += lc.cmdsize as usize;
     }
 
-    crate::log::info!("Mach-O parsed: arch={:?}, entry={:#x}, segments={}", img.arch, img.entry_point, img.segments.len());
+    log::info!("Mach-O parsed: arch={:?}, entry={:#x}, segments={}", img.arch, img.entry_point, img.segments.len());
     Some(img)
 }
 
-/// Minimal exec interface: parse header, map segments, jump placeholder.
 pub fn exec(path: *const u8, len: usize) -> usize {
     let data = unsafe { core::slice::from_raw_parts(path, len) };
     let img = match parse(data) {
@@ -171,17 +178,17 @@ pub fn exec(path: *const u8, len: usize) -> usize {
     };
 
     if img.segments.is_empty() {
-        crate::log::warn!("Mach-O has no loadable segments");
+        log::warn!("Mach-O has no loadable segments");
         return 0xDEAD;
     }
 
-    crate::log::info!(
+    log::info!(
         "Mach-O exec ready: arch={:?}, entry={:#x}, dynamic={}",
         img.arch, img.entry_point, img.dynamic
     );
 
     if img.dynamic {
-        crate::log::info!("Dynamic Mach-O — dyld stub would run here");
+        log::info!("Dynamic Mach-O — dyld stub would run here");
     }
 
     // TODO: map segments into user address space, set up stack, transfer control

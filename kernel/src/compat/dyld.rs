@@ -28,7 +28,7 @@ impl DyldState {
 /// Stub: "load" a requested dylib by name. In a real OS this would
 /// open the shared library file, parse its Mach-O, and resolve exports.
 pub fn load_dylib(name: &str, state: &mut DyldState) -> bool {
-    crate::log::info!("dyld: loading stub library '{}'", name);
+    log::info!("dyld: loading stub library '{}'", name);
     state.libs.push(String::from(name));
     true
 }
@@ -51,7 +51,7 @@ pub fn resolve_symbol(_lib: &str, name: &str) -> Option<u64> {
 pub fn run_dyld_stub(entry: u64, base: u64, _bind_data: &[u8]) {
     let mut state = DyldState::new(entry, base);
     // In a real implementation we would iterate LC_LOAD_DYLIB commands here.
-    crate::log::info!(
+    log::info!(
         "dyld stub: preparing dynamic binary entry={:#x} base={:#x}",
         state.entry, state.base
     );

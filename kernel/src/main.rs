@@ -10,11 +10,31 @@ extern crate alloc;
 use core::panic::PanicInfo;
 extern crate log;
 
+#[cfg(target_arch = "x86_64")]
+extern "C" fn init_task() -> ! {
+    log::info!("init: Vibe Coded OS running");
+    loop {
+        hal::x86_64::halt();
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+extern "C" fn init_task() -> ! {
+    log::info!("init: Vibe Coded OS running");
+    loop {
+        hal::aarch64::halt();
+    }
+}
+
+
 mod arch;
 mod mm;
 mod scheduler;
 mod syscalls;
 mod compat;
+
+/// Simple init task that prints and idles.
+
 
 #[cfg(target_arch = "x86_64")]
 use arch::x86_64 as arch_impl;
@@ -31,8 +51,8 @@ pub extern "C" fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     compat::init();
     syscalls::init();
 
-    log::info!("Vibe Coded OS kernel initialized. Scheduling first task.");
-
+    log::info!("Vibe Coded OS kernel initialized. Spawning init task.");
+    scheduler::spawn(init_task, None);
     scheduler::run_first_task();
 }
 
