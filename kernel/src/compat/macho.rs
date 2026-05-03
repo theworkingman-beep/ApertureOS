@@ -182,15 +182,28 @@ pub fn exec(path: *const u8, len: usize) -> usize {
         return 0xDEAD;
     }
 
-    log::info!(
-        "Mach-O exec ready: arch={:?}, entry={:#x}, dynamic={}",
-        img.arch, img.entry_point, img.dynamic
-    );
+    for (vmaddr, vmsize, fileoff, filesize) in img.segments.iter() {
+        let layout = core::alloc::Layout::from_size_align(*vmsize as usize, 4096);
+        if layout.is_err() { continue; }
+        let layout = layout.unwrap();
+        let ptr = unsafe { alloc::alloc::alloc(layout) };
+        if ptr.is_null() { continue; }
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                data.as_ptr().add(*fileoff as usize),
+                ptr,
+                *filesize as usize,
+            );
+            core::ptr::write_bytes(ptr.add(*filesize as usize), 0, (*vmsize - *filesize) as usize);
+        }
+        log::info!("Mach-O mapped seg vmaddr={:#x} -> ptr={:#x}", vmaddr, ptr as usize);
+    }
+
+    log::info!("Mach-O exec ready: arch={:?}, entry={:#x}, dynamic={}", img.arch, img.entry_point, img.dynamic);
 
     if img.dynamic {
         log::info!("Dynamic Mach-O — dyld stub would run here");
     }
 
-    // TODO: map segments into user address space, set up stack, transfer control
     0
 }
