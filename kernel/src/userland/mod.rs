@@ -1,6 +1,7 @@
 pub mod brew;
 pub mod shell;
 pub mod compositor;
+pub mod loader;
 
 pub fn init() {
     log::info!("userland: initializing");
