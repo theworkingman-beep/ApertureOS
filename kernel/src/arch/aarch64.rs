@@ -142,11 +142,9 @@ pub extern "C" fn handle_irq_el1() {
                 crate::drivers::uart::handle_uart_irq();
             }
             KMI0_IRQ => {
-                #[cfg(feature = "bsp_qemu")]
                 crate::drivers::pl050_kmi::handle_kmi0_irq();
             }
             KMI1_IRQ => {
-                #[cfg(feature = "bsp_qemu")]
                 crate::drivers::pl050_kmi::handle_kmi1_irq();
             }
             _ => {

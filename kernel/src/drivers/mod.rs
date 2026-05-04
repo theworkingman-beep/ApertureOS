@@ -6,3 +6,5 @@ pub mod cursor;
 pub mod ps2kbd;
 #[cfg(target_arch = "x86_64")]
 pub mod ps2mouse;
+#[cfg(target_arch = "aarch64")]
+pub mod pl050_kmi;

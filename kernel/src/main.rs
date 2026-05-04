@@ -281,6 +281,12 @@ pub extern "C" fn kernel_main(boot_info: *mut BootInfo) -> ! {
     #[cfg(target_arch = "x86_64")]
     drivers::ps2mouse::init();
 
+    #[cfg(target_arch = "aarch64")]
+    {
+        drivers::pl050_kmi::init_kmi0();
+        drivers::pl050_kmi::init_kmi1();
+    }
+
     scheduler::init();
     ipc::init();
     shm::init();
