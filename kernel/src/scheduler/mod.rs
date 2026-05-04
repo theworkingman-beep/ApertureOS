@@ -57,19 +57,27 @@ impl Task {
     }
 
     pub fn init_context(&mut self) {
-        let mut rsp = self.stack_top();
+        let mut sp = self.stack_top();
         unsafe {
-            // Push entry point as return address (this will be at the TOP of the stack)
-            rsp -= core::mem::size_of::<usize>();
-            *(rsp as *mut usize) = self.entry;
-            // Push dummy values for r15, r14, r13, r12, rbp, rbx (in reverse order of pop)
-            // switch_context pops: rbx, rbp, r12, r13, r14, r15
+            // Push entry point as return address (will be at the top of the stack)
+            sp -= core::mem::size_of::<usize>();
+            *(sp as *mut usize) = self.entry;
+
+            // Push dummy values for callee-saved registers
+            #[cfg(target_arch = "x86_64")]
             for _ in 0..6 {
-                rsp -= core::mem::size_of::<usize>();
-                *(rsp as *mut usize) = 0;
+                sp -= core::mem::size_of::<usize>();
+                *(sp as *mut usize) = 0;
+            }
+
+            // aarch64: x19-x30 = 12 callee-saved registers
+            #[cfg(target_arch = "aarch64")]
+            for _ in 0..12 {
+                sp -= core::mem::size_of::<usize>();
+                *(sp as *mut usize) = 0;
             }
         }
-        self.context.rsp = rsp;
+        self.context.rsp = sp;
     }
 }
 
@@ -187,35 +195,93 @@ core::arch::global_asm!(
 );
 
 extern "C" {
-    fn switch_context(old_rsp_ptr: *mut usize, new_rsp: usize);
+    fn switch_context(old_sp_ptr: *mut usize, new_sp: usize);
 }
 
+/// Yield CPU to the next task (aarch64 version — same logic as x86_64)
 #[cfg(target_arch = "aarch64")]
-unsafe fn save_context(_old_sp: usize) -> usize {
-    let mut sp = _old_sp;
-    // Push x19-x30 (callee-saved) + entry point
-    for _ in 0..13 {
-        sp -= core::mem::size_of::<usize>();
-        *(sp as *mut usize) = 0;
+unsafe fn do_switch_task() {
+    let next_sp: usize;
+    let old_sp_ptr: *mut usize;
+
+    {
+        let mut tasks = TASKS.lock();
+        let len = tasks.len();
+        if len == 0 { return; }
+
+        let cur_id = *CURRENT_TASK.lock();
+        let mut cur_idx = None;
+        for (i, t) in tasks.iter().enumerate() {
+            if t.id == cur_id.unwrap_or(0) {
+                cur_idx = Some(i);
+                break;
+            }
+        }
+
+        let mut next_idx = None;
+        for i in 0..len {
+            let idx = (cur_idx.unwrap_or(usize::MAX) + 1 + i) % len;
+            if tasks[idx].state != TaskState::Dead {
+                next_idx = Some(idx);
+                break;
+            }
+        }
+
+        let next_idx = match next_idx {
+            Some(n) => n,
+            None => return,
+        };
+
+        if let Some(ci) = cur_idx {
+            if tasks[ci].state == TaskState::Running {
+                tasks[ci].state = TaskState::Ready;
+            }
+            old_sp_ptr = &mut tasks[ci].context.rsp as *mut usize;
+        } else {
+            old_sp_ptr = core::ptr::null_mut();
+        }
+
+        next_sp = tasks[next_idx].context.rsp;
+        tasks[next_idx].state = TaskState::Running;
+        *CURRENT_TASK.lock() = Some(tasks[next_idx].id);
     }
-    sp
+
+    switch_context(old_sp_ptr, next_sp);
 }
 
+/// Assembly context switch for aarch64 — saves x19-x30 (12 callee-saved regs)
 #[cfg(target_arch = "aarch64")]
-unsafe fn restore_context(new_sp: usize) {
-    core::arch::asm!(
-        "mov sp, {sp}",
-        "ldp x19, x20, [sp], #16",
-        "ldp x21, x22, [sp], #16",
-        "ldp x23, x24, [sp], #16",
-        "ldp x25, x26, [sp], #16",
-        "ldp x27, x28, [sp], #16",
-        "ldp x29, x30, [sp], #16",
-        "ret",
-        sp = in(reg) new_sp,
-        options(nomem, nostack)
-    );
-}
+core::arch::global_asm!(
+    ".global switch_context",
+    "switch_context:",
+    // x0 = old_sp_ptr, x1 = new_sp
+    "cbz x0, 1f",
+    // Get current SP and save to old task context
+    "mov x2, sp",
+    "str x2, [x0]",
+    // Push callee-saved registers x19-x30 (12 registers = 96 bytes)
+    "stp x29, x30, [sp, #-16]!",
+    "stp x27, x28, [sp, #-16]!",
+    "stp x25, x26, [sp, #-16]!",
+    "stp x23, x24, [sp, #-16]!",
+    "stp x21, x22, [sp, #-16]!",
+    "stp x19, x20, [sp, #-16]!",
+    // Save SP after pushes
+    "mov x2, sp",
+    "str x2, [x0]",
+    "1:",
+    // Switch to new stack
+    "mov sp, x1",
+    // Pop callee-saved registers
+    "ldp x19, x20, [sp], #16",
+    "ldp x21, x22, [sp], #16",
+    "ldp x23, x24, [sp], #16",
+    "ldp x25, x26, [sp], #16",
+    "ldp x27, x28, [sp], #16",
+    "ldp x29, x30, [sp], #16",
+    // Return
+    "ret",
+);
 
 /// Run the scheduler — starts the first task and never returns
 pub fn run_scheduler() -> ! {
