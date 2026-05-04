@@ -283,8 +283,9 @@ pub extern "C" fn kernel_main(boot_info: *mut BootInfo) -> ! {
 
     #[cfg(target_arch = "aarch64")]
     {
-        drivers::pl050_kmi::init_kmi0();
-        drivers::pl050_kmi::init_kmi1();
+        // KMI devices are optional on QEMU virt - require explicit -device pl050
+        // Keyboard input is available via PL011 UART console
+        log::info!("aarch64: KMI devices not initialized (use -device pl050 to enable)");
     }
 
     scheduler::init();

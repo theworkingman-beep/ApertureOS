@@ -69,7 +69,7 @@ unsafe fn kmi_read_data(base: *mut u8) -> u8 {
     read_volatile(base.add(KMI_DATA))
 }
 
-/// Initialize KMI0 (keyboard)
+/// Initialize KMI0 (keyboard) — caller must ensure device is present
 pub fn init_kmi0() {
     unsafe {
         // Disable before configuration
@@ -80,7 +80,7 @@ pub fn init_kmi0() {
     log::info!("pl050: KMI0 (keyboard) initialized");
 }
 
-/// Initialize KMI1 (mouse)
+/// Initialize KMI1 (mouse) — caller must ensure device is present
 pub fn init_kmi1() {
     unsafe {
         // Disable before configuration
