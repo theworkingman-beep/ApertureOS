@@ -1,5 +1,4 @@
 //! Syscall dispatch table
-use core::arch::asm;
 
 pub fn init() {}
 

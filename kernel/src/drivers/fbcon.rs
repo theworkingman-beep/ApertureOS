@@ -53,3 +53,11 @@ pub fn draw_rect(x: usize, y: usize, w: usize, h: usize, color: u32) {
         }
     }
 }
+
+pub unsafe fn fb_width() -> usize {
+    FB_W
+}
+
+pub unsafe fn fb_height() -> usize {
+    FB_H
+}
