@@ -1,6 +1,7 @@
 //! Vibe Coded OS — Kernel Entry Point
 #![no_std]
 #![no_main]
+#![feature(abi_x86_interrupt)]
 
 extern crate alloc;
 
