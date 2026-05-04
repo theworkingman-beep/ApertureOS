@@ -62,6 +62,9 @@ pub fn init() {
         wait_kb_ready();
         outb(0x60, 0xF4);
 
+        wait_kb_ready();
+        outb(0x60, 0xF6);
+
         log::info!("ps2mouse: initialized (IRQ 12 -> int 0x2C)");
     }
 }

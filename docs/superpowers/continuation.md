@@ -30,6 +30,7 @@ You are explicitly allowed and encouraged to cut corners where it makes sense. U
 
 - **Superpowers plugin:** Installed via `opencode.json`. Use `/using-superpowers` skill to manage workflows.
 - **If superpowers is not installed:** Follow installation at https://github.com/obra/superpowers?tab=readme-ov-file#installation
+- **CLI permissions:** If opencode (or any other CLI) does not have full permissions, configure it to have all permissions set to `"allow"` and prompt the user to restart the CLI for changes to take effect.
 - **Rust toolchain:** `nightly-aarch64-unknown-linux-gnu` at `$HOME/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/bin/`
 - **OVMF:** `/usr/share/OVMF/OVMF_CODE_4M.fd` + `/usr/share/OVMF/OVMF_VARS_4M.fd`
 - **AAVMF:** `/usr/share/AAVMF/AAVMF_CODE.no-secboot.fd` + `/usr/share/AAVMF/AAVMF_VARS.fd`
