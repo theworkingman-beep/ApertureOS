@@ -380,6 +380,50 @@ pub fn create_task_page_tables(kernel_pml4_phys: usize, kernel_pml4_virt: *mut P
     }
 }
 
+/// Recursively mark PDPT entries COW
+unsafe fn copy_pdpt_cow(parent_addr: usize, child_addr: usize) {
+    let parent = &*(parent_addr as *const PageTable);
+    let child = &mut *(child_addr as *mut PageTable);
+    for i in 0..512 {
+        if parent[i] & 1 == 0 { continue; }
+        child[i] = parent[i];
+        if parent[i] & (1 << 7) != 0 { continue; } // 1GB page, skip
+        let parent_pd_addr = (parent[i] & !0xFFF) as usize;
+        let child_pd_addr = (child[i] & !0xFFF) as usize;
+        copy_pd_cow(parent_pd_addr, child_pd_addr);
+    }
+}
+
+/// Recursively mark PD entries COW
+unsafe fn copy_pd_cow(parent_addr: usize, child_addr: usize) {
+    let parent = &*(parent_addr as *const PageTable);
+    let child = &mut *(child_addr as *mut PageTable);
+    for i in 0..512 {
+        if parent[i] & 1 == 0 { continue; }
+        child[i] = parent[i];
+        if parent[i] & (1 << 7) != 0 { continue; } // 2MB page, skip
+        let parent_pt_addr = (parent[i] & !0xFFF) as usize;
+        let child_pt_addr = (child[i] & !0xFFF) as usize;
+        copy_pt_cow(parent_pt_addr, child_pt_addr);
+    }
+}
+
+/// Mark PT entries COW (read-only + COW bit)
+unsafe fn copy_pt_cow(parent_addr: usize, child_addr: usize) {
+    let parent = &*(parent_addr as *const PageTable);
+    let child = &mut *(child_addr as *mut PageTable);
+    let cow_bit: u64 = 1 << 9;
+    let writable_mask: u64 = 1 << 1; // Writable bit
+    for i in 0..512 {
+        if parent[i] & 1 == 0 { continue; }
+        // Copy entry and mark as read-only with COW bit
+        child[i] = parent[i] & !writable_mask | cow_bit;
+        // Also mark parent as COW (both share the page now)
+        let parent_entry = (parent_addr as *mut u64).add(i);
+        *parent_entry = (*parent_entry) & !writable_mask | cow_bit;
+    }
+}
+
 /// Copy page tables with COW (copy-on-write) for fork()
 /// Marks all user-accessible pages as read-only with COW bit set
 pub unsafe fn copy_page_tables_cow(parent_pml4_virt: *mut PageTable, child_pml4_virt: *mut PageTable) {
@@ -393,62 +437,6 @@ pub unsafe fn copy_page_tables_cow(parent_pml4_virt: *mut PageTable, child_pml4_
 
     // For user space entries (0-255), mark pages COW
     let cow_bit: u64 = 1 << 9; // Software bit for COW
-    let present_mask: u64 = 1; // Present bit;
-
-    for pml4_idx in 0..256 {
-        if parent_pml4[pml4_idx] & present_mask == 0 { continue; }
-        let parent_pdpt_addr = (parent_pml4[pml4_idx] & !0xFFF) as usize;
-        let child_pdpt_addr = (child_pml4[pml4_idx] & !0xFFF) as usize;
-        copy_pdpt_cow(parent_pdpt_addr, child_pdpt_addr);
-    }
-
-    /// Recursively mark PDPT entries COW
-    unsafe fn copy_pdpt_cow(parent_addr: usize, child_addr: usize) {
-        let parent = &*(parent_addr as *const PageTable);
-        let child = &mut *(child_addr as *mut PageTable);
-        for i in 0..512 {
-            if parent[i] & 1 == 0 { continue; }
-            child[i] = parent[i];
-            if parent[i] & (1 << 7) != 0 { continue; } // 1GB page, skip
-            let parent_pd_addr = (parent[i] & !0xFFF) as usize;
-            let child_pd_addr = (child[i] & !0xFFF) as usize;
-            copy_pd_cow(parent_pd_addr, child_pd_addr);
-        }
-    }
-
-    /// Recursively mark PD entries COW
-    unsafe fn copy_pd_cow(parent_addr: usize, child_addr: usize) {
-        let parent = &*(parent_addr as *const PageTable);
-        let child = &mut *(child_addr as *mut PageTable);
-        for i in 0..512 {
-            if parent[i] & 1 == 0 { continue; }
-            child[i] = parent[i];
-            if parent[i] & (1 << 7) != 0 { continue; } // 2MB page, skip
-            let parent_pt_addr = (parent[i] & !0xFFF) as usize;
-            let child_pt_addr = (child[i] & !0xFFF) as usize;
-            copy_pt_cow(parent_pt_addr, child_pt_addr);
-        }
-    }
-
-    /// Mark PT entries COW (read-only + COW bit)
-    unsafe fn copy_pt_cow(parent_addr: usize, child_addr: usize) {
-        let parent = &*(parent_addr as *const PageTable);
-        let child = &mut *(child_addr as *mut PageTable);
-        let cow_bit: u64 = 1 << 9;
-        let writable_mask: u64 = 1 << 1; // Writable bit
-        for i in 0..512 {
-            if parent[i] & 1 == 0 { continue; }
-            // Copy entry and mark as read-only with COW bit
-            child[i] = parent[i] & !writable_mask | cow_bit;
-            // Also mark parent as COW (both share the page now)
-            let parent_entry = (parent_addr as *mut u64).add(i);
-            *parent_entry = (*parent_entry) & !writable_mask | cow_bit;
-        }
-    }
-}
-
-    // For user space entries (0-255), mark pages COW
-    let cow_bit: u64 = 1 << 9; // Software bit for COW
     let present_mask: u64 = 1; // Present bit
 
     for pml4_idx in 0..256 {
@@ -456,50 +444,6 @@ pub unsafe fn copy_page_tables_cow(parent_pml4_virt: *mut PageTable, child_pml4_
         let parent_pdpt_addr = (parent_pml4[pml4_idx] & !0xFFF) as usize;
         let child_pdpt_addr = (child_pml4[pml4_idx] & !0xFFF) as usize;
         copy_pdpt_cow(parent_pdpt_addr, child_pdpt_addr);
-    }
-
-    /// Recursively mark PDPT entries COW
-    unsafe fn copy_pdpt_cow(parent_addr: usize, child_addr: usize) {
-        let parent = &*(parent_addr as *const PageTable);
-        let child = &mut *(child_addr as *mut PageTable);
-        for i in 0..512 {
-            if parent[i] & 1 == 0 { continue; }
-            child[i] = parent[i];
-            if parent[i] & (1 << 7) != 0 { continue; } // 1GB page, skip
-            let parent_pd_addr = (parent[i] & !0xFFF) as usize;
-            let child_pd_addr = (child[i] & !0xFFF) as usize;
-            copy_pd_cow(parent_pd_addr, child_pd_addr);
-        }
-    }
-
-    /// Recursively mark PD entries COW
-    unsafe fn copy_pd_cow(parent_addr: usize, child_addr: usize) {
-        let parent = &*(parent_addr as *const PageTable);
-        let child = &mut *(child_addr as *mut PageTable);
-        for i in 0..512 {
-            if parent[i] & 1 == 0 { continue; }
-            child[i] = parent[i];
-            if parent[i] & (1 << 7) != 0 { continue; } // 2MB page, skip
-            let parent_pt_addr = (parent[i] & !0xFFF) as usize;
-            let child_pt_addr = (child[i] & !0xFFF) as usize;
-            copy_pt_cow(parent_pt_addr, child_pt_addr);
-        }
-    }
-
-    /// Mark PT entries COW (read-only + COW bit)
-    unsafe fn copy_pt_cow(parent_addr: usize, child_addr: usize) {
-        let parent = &*(parent_addr as *const PageTable);
-        let child = &mut *(child_addr as *mut PageTable);
-        let cow_bit: u64 = 1 << 9;
-        let writable_mask: u64 = 1 << 1; // Writable bit
-        for i in 0..512 {
-            if parent[i] & 1 == 0 { continue; }
-            // Copy entry and mark as read-only with COW bit
-            child[i] = parent[i] & !writable_mask | cow_bit;
-            // Also mark parent as COW (both share the page now)
-            let parent_entry = (parent_addr as *mut PageTable).add(i);
-            *parent_entry = (*parent_entry) & !writable_mask | cow_bit;
-        }
     }
 }
 

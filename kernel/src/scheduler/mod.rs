@@ -32,7 +32,6 @@ pub enum TaskState {
 }
 
 /// Task structure
-#[derive(Clone)]
 pub struct Task {
     pub id: usize,
     pub stack: *mut u8,
@@ -52,8 +51,6 @@ unsafe impl Send for Task {}
 
 impl Clone for Task {
     fn clone(&self) -> Self {
-        // Note: stack pointer is copied, but the actual stack memory is shared
-        // In a real fork, we would copy the stack
         Self {
             id: self.id,
             stack: self.stack,
@@ -204,7 +201,6 @@ pub struct ExitStatus {
 }
 
 /// Process table entry
-#[derive(Clone)]
 pub struct Process {
     pub pid: usize,
     pub task: Task,
@@ -217,11 +213,11 @@ pub struct Process {
 unsafe impl Send for Process {}
 
 /// Process table (indexed by PID)
-static PROCESSES: Mutex<Vec<Process>> = Mutex::new(Vec::new());
+pub static PROCESSES: Mutex<Vec<Process>> = Mutex::new(Vec::new());
 /// Current running PID
-static CURRENT_TASK: Mutex<Option<usize>> = Mutex::new(None);
+pub static CURRENT_TASK: Mutex<Option<usize>> = Mutex::new(None);
 /// PID counter (next PID to allocate)
-static PID_COUNTER: Mutex<usize> = Mutex::new(1); // PID 0 = kernel
+pub static PID_COUNTER: Mutex<usize> = Mutex::new(1); // PID 0 = kernel
 
 pub fn init() {
     log::info!("scheduler: initialized");
@@ -302,11 +298,11 @@ pub fn fork() -> usize {
     if let (Some(parent_pt), Some(child_pt)) = (parent_page_tables, child_task.page_tables.as_mut()) {
         #[cfg(target_arch = "x86_64")]
         {
-            crate::arch::x86_64::copy_page_tables_cow(parent_pt.pml4_virt, child_pt.pml4_virt);
+            unsafe { crate::arch::x86_64::copy_page_tables_cow(parent_pt.pml4_virt, child_pt.pml4_virt); }
         }
         #[cfg(target_arch = "aarch64")]
         {
-            crate::arch::aarch64::copy_page_tables_cow(parent_pt.ttbr0_virt, child_pt.ttbr0_virt);
+            unsafe { crate::arch::aarch64::copy_page_tables_cow(parent_pt.ttbr0_virt, child_pt.ttbr0_virt); }
         }
     }
 
