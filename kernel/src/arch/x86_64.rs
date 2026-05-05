@@ -45,6 +45,63 @@ extern "x86-interrupt" fn page_fault_handler(sf: &mut InterruptStackFrame, err_c
     let present = if err_code & 1 != 0 { "present" } else { "not-present" };
     let write = if err_code & 2 != 0 { "write" } else { "read" };
     let user = if err_code & 4 != 0 { "user" } else { "supervisor" };
+
+    // Check if this is a COW (copy-on-write) page
+    // COW pages are marked read-only (bit 1 clear) but have PTE_COW bit set (bit 9)
+    if write == "write" && present == "present" {
+        let pte_cow = 1u64 << 9; // software bit for COW
+        let pte_addr_mask = 0x000FFFFFFFFFF000u64;
+
+        // Walk page tables to find the PTE
+        let cr3 = unsafe {
+            let mut val: u64;
+            core::arch::asm!("mov {}, cr3", out(reg) val);
+            val
+        };
+        let pml4_idx = ((cr2 as usize) >> 39) & 0x1FF;
+        let pdpt_idx = ((cr2 as usize) >> 30) & 0x1FF;
+        let pd_idx = ((cr2 as usize) >> 21) & 0x1FF;
+        let pt_idx = ((cr2 as usize) >> 12) & 0x1FF;
+
+        let pml4 = (cr3 & !0xFFF) as *const u64;
+        let pml4e = unsafe { *pml4.add(pml4_idx) };
+        if pml4e & PTE_PRESENT != 0 {
+            let pdpt = (pml4e & !0xFFF) as *const u64;
+            let pdpte = unsafe { *pdpt.add(pdpt_idx) };
+            if pdpte & PTE_PRESENT != 0 && (pdpte & (1 << 7)) == 0 {
+                // Not a huge page
+                let pd = (pdpte & !0xFFF) as *const u64;
+                let pde = unsafe { *pd.add(pd_idx) };
+                if pde & PTE_PRESENT != 0 && (pde & (1 << 7)) == 0 {
+                    // Not a large page
+                    let pt = (pde & !0xFFF) as *mut u64;
+                    let pte = unsafe { *pt.add(pt_idx) };
+                    if pte & pte_cow != 0 {
+                        // COW fault — copy the page
+                        let old_frame = (pte & pte_addr_mask) as usize;
+                        let new_frame = crate::mm::frame_alloc::alloc_frame()
+                            .expect("COW: failed to allocate frame");
+                        // Copy old page content
+                        unsafe {
+                            core::ptr::copy_nonoverlapping(
+                                old_frame as *const u8,
+                                new_frame as *mut u8,
+                                4096,
+                            );
+                        }
+                        // Map new frame writable, clear COW bit
+                        unsafe {
+                            *pt.add(pt_idx) = (new_frame as u64) | PTE_PRESENT | PTE_WRITABLE | PTE_ACCESSED | PTE_DIRTY | PTE_USER;
+                            // Invalidate TLB entry
+                            core::arch::asm!("invlpg [{0}]", in(reg) cr2, options(nostack));
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
     log::error!("PAGE FAULT at {:#x}: {} {} {} (rip={:#x})",
         cr2, present, write, user, sf._rip);
     loop { unsafe { core::arch::asm!("hlt") } }
@@ -195,6 +252,7 @@ const PTE_USER: u64 = 1 << 2;
 const PTE_ACCESSED: u64 = 1 << 5;
 const PTE_DIRTY: u64 = 1 << 6;
 const PTE_GLOBAL: u64 = 1 << 8;
+const PTE_COW: u64 = 1 << 9; // Copy-on-write marker (software bit)
 
 const PTE_KERNEL: u64 = PTE_PRESENT | PTE_WRITABLE | PTE_ACCESSED | PTE_DIRTY | PTE_GLOBAL;
 const PTE_USER_RW: u64 = PTE_PRESENT | PTE_WRITABLE | PTE_USER | PTE_ACCESSED | PTE_DIRTY;

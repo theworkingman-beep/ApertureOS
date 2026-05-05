@@ -124,6 +124,7 @@ const PTE_SH_INNER: u64 = 3 << 8; // Inner shareable
 const PTE_AF: u64 = 1 << 10; // Access flag
 const PTE_NG: u64 = 1 << 11; // Not global
 const PTE_XN: u64 = 1 << 54; // Execute never
+const PTE_COW: u64 = 1 << 55; // Copy-on-write marker (software bit)
 
 /// Kernel page flags: EL1 R/W, inner shareable, execute allowed
 const PTE_KERNEL_RW: u64 = PTE_VALID | PTE_AP_KERNEL | PTE_SH_INNER | PTE_AF | PTE_TABLE;
@@ -430,8 +431,56 @@ pub extern "C" fn handle_sync_lower_el() {
             handle_syscall(elr);
         } else if ec == 0x24 || ec == 0x20 {
             // Data Abort from lower EL
+            let dfsc = esr & 0x3F;
+            let is_write = (esr >> 6) & 1;
+            let is_cow = (esr >> 8) & 1; // software bit in ESR for COW
+
+            // Check if this is a COW (copy-on-write) page fault
+            // COW pages are read-only but marked with a software bit
+            if is_write != 0 && dfsc == 0x7 {
+                // Translation fault level 3 — check if COW
+                let addr = far;
+                let l0_idx = ((addr >> 39) & 0x1FF) as usize;
+                let l1_idx = ((addr >> 30) & 0x1FF) as usize;
+                let l2_idx = ((addr >> 21) & 0x1FF) as usize;
+                let l3_idx = ((addr >> 12) & 0x1FF) as usize;
+
+                let ttbr0 = crate::arch::aarch64::read_ttbr0() as usize;
+                let l0 = ttbr0 as *const u64;
+                let l0e = unsafe { *l0.add(l0_idx) };
+                if l0e & PTE_VALID != 0 {
+                    let l1 = (l0e & !0xFFF) as *const u64;
+                    let l1e = unsafe { *l1.add(l1_idx) };
+                    if l1e & PTE_VALID != 0 && (l1e & 3) == PTE_TABLE {
+                        let l2 = (l1e & !0xFFF) as *mut u64;
+                        let l2e = unsafe { *l2.add(l2_idx) };
+                        if l2e & PTE_VALID != 0 && (l2e & 3) == PTE_TABLE {
+                            let l3 = (l2e & !0xFFF) as *mut u64;
+                            let l3e = unsafe { *l3.add(l3_idx) };
+                            let cow_bit: u64 = 1 << 55; // software bit for COW
+                            if l3e & cow_bit != 0 {
+                                // COW fault — copy the page
+                                let old_frame = (l3e & !0xFFF) as usize;
+                                let new_frame = crate::mm::frame_alloc::alloc_frame()
+                                    .expect("COW: failed to allocate frame");
+                                unsafe {
+                                    core::ptr::copy_nonoverlapping(
+                                        old_frame as *const u8,
+                                        new_frame as *mut u8,
+                                        4096,
+                                    );
+                                    // Map new frame writable, clear COW bit
+                                    *l3.add(l3_idx) = (new_frame as u64) | PTE_USER_PAGE | PTE_AF;
+                                    // Invalidate TLB
+                                    asm!("tlbi vae1is, {}", in(reg) addr >> 12, options(nostack));
+                                }
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
             log::error!("aarch64: Data Abort from EL0, FAR={:#x}, ELR={:#x}, ESR={:#x}", far, elr, esr);
-            // For now, kill the task
             panic!("User space data abort");
         } else {
             log::error!("aarch64: Synchronous exception from EL0, EC={:#x}, FAR={:#x}, ELR={:#x}, ESR={:#x}",
