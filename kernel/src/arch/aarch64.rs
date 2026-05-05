@@ -241,6 +241,73 @@ pub fn create_task_page_tables(kernel_ttbr0_phys: usize, kernel_ttbr0_virt: *mut
     }
 }
 
+/// Copy page tables with COW (copy-on-write) for fork()
+/// Marks all user-accessible pages as read-only with COW bit set
+pub unsafe fn copy_page_tables_cow(parent_l0_virt: *mut PageTable, child_l0_virt: *mut PageTable) {
+    let parent_l0 = &*parent_l0_virt;
+    let child_l0 = &mut *child_l0_virt;
+
+    // Copy all entries first
+    for i in 0..512 {
+        child_l0[i] = parent_l0[i];
+    }
+
+    // For user space entries, mark pages COW
+    let cow_bit: u64 = 1 << 55; // Software bit for COW
+    let present: u64 = 1; // Valid bit
+
+    for l0_idx in 0..256 {
+        if parent_l0[l0_idx] & present == 0 { continue; }
+        let parent_l1_addr = (parent_l0[l0_idx] & !0xFFF) as usize;
+        let child_l1_addr = (child_l0[l0_idx] & !0xFFF) as usize;
+        copy_l1_cow(parent_l1_addr, child_l1_addr);
+    }
+
+    /// Recursively mark L1 entries COW
+    unsafe fn copy_l1_cow(parent_addr: usize, child_addr: usize) {
+        let parent = &*(parent_addr as *const PageTable);
+        let child = &mut *(child_addr as *mut PageTable);
+        for i in 0..512 {
+            if parent[i] & 1 == 0 { continue; }
+            child[i] = parent[i];
+            if parent[i] & (1 << 7) != 0 { continue; } // 1GB page, skip
+            let parent_l2_addr = (parent[i] & !0xFFF) as usize;
+            let child_l2_addr = (child[i] & !0xFFF) as usize;
+            copy_l2_cow(parent_l2_addr, child_l2_addr);
+        }
+    }
+
+    /// Recursively mark L2 entries COW
+    unsafe fn copy_l2_cow(parent_addr: usize, child_addr: usize) {
+        let parent = &*(parent_addr as *const PageTable);
+        let child = &mut *(child_addr as *mut PageTable);
+        for i in 0..512 {
+            if parent[i] & 1 == 0 { continue; }
+            child[i] = parent[i];
+            if parent[i] & (1 << 7) != 0 { continue; } // 2MB page, skip
+            let parent_l3_addr = (parent[i] & !0xFFF) as usize;
+            let child_l3_addr = (child[i] & !0xFFF) as usize;
+            copy_l3_cow(parent_l3_addr, child_l3_addr);
+        }
+    }
+
+    /// Mark L3 entries COW (read-only + COW bit)
+    unsafe fn copy_l3_cow(parent_addr: usize, child_addr: usize) {
+        let parent = &*(parent_addr as *const PageTable);
+        let child = &mut *(child_addr as *mut PageTable);
+        let cow_bit: u64 = 1 << 55;
+        let writable_mask: u64 = 0x3 << 6; // AP[2:1] bits - clear for read-only
+        for i in 0..512 {
+            if parent[i] & 1 == 0 { continue; }
+            // Copy entry and mark as read-only with COW bit
+            child[i] = parent[i] & !writable_mask | cow_bit;
+            // Also mark parent as COW
+            let parent_entry = (parent_addr as *mut u64).add(i);
+            *parent_entry = (*parent_entry) & !writable_mask | cow_bit;
+        }
+    }
+}
+
 /// Map a user-space page in a task's page tables
 pub fn map_user_page(task_pt: &mut TaskPageTables, vaddr: u64, writable: bool) -> Option<usize> {
     let l0 = unsafe { &mut *task_pt.ttbr0_virt };
@@ -309,6 +376,12 @@ pub fn unmap_user_page(task_pt: &mut TaskPageTables, vaddr: u64) {
         crate::mm::frame_alloc::free_frame(phys);
         l3[l3_idx] = 0;
     }
+}
+
+/// Map a user page for a specific task (called from loader)
+/// Returns the physical address of the mapped page
+pub unsafe fn map_user_page_for_task(pt: &mut TaskPageTables, vaddr: u64, writable: bool) -> Option<usize> {
+    map_user_page(pt, vaddr, writable)
 }
 
 /// Load page tables (set TTBR0_EL1) and invalidate TLB

@@ -281,41 +281,53 @@ pub fn yield_cpu() {
     }
 }
 
-/// Fork current process (creates a child with copy of page tables)
+/// Fork current process (creates a child with COW copy of page tables)
 pub fn fork() -> usize {
     let cur_pid = current_task_id();
-    let procs = PROCESSES.lock();
-    let cur_proc = procs.iter().find(|p| p.pid == cur_pid).cloned();
-    drop(procs);
-
-    if let Some(mut parent_proc) = cur_proc {
-        let child_pid = alloc_pid();
-
-        // Create new task with copied page tables
-        let child_task = Task::new_user(child_pid, parent_proc.task.entry);
-        // Copy parent's page tables to child
-        // (In a real fork, we'd COW the pages)
-
-        let child_proc = Process {
-            pid: child_pid,
-            task: child_task,
-            parent: Some(cur_pid),
-            children: Vec::new(),
-            exit_status: None,
-            waiters: Vec::new(),
-        };
-
-        let mut procs = PROCESSES.lock();
-        procs.push(child_proc);
-        if let Some(parent) = procs.iter_mut().find(|p| p.pid == cur_pid) {
-            parent.children.push(child_pid);
+    let (parent_task_entry, parent_page_tables) = {
+        let procs = PROCESSES.lock();
+        let parent = procs.iter().find(|p| p.pid == cur_pid);
+        match parent {
+            Some(p) => (p.task.entry, p.task.page_tables),
+            None => return 0,
         }
+    };
 
-        // Return child PID to parent, 0 to child (for now, just return child PID)
-        child_pid
-    } else {
-        0
+    let child_pid = alloc_pid();
+
+    // Create child task
+    let mut child_task = Task::new_user(child_pid, parent_task_entry);
+
+    // Copy parent's page tables to child and mark pages COW
+    if let (Some(parent_pt), Some(child_pt)) = (parent_page_tables, child_task.page_tables.as_mut()) {
+        #[cfg(target_arch = "x86_64")]
+        {
+            crate::arch::x86_64::copy_page_tables_cow(parent_pt.pml4_virt, child_pt.pml4_virt);
+        }
+        #[cfg(target_arch = "aarch64")]
+        {
+            crate::arch::aarch64::copy_page_tables_cow(parent_pt.ttbr0_virt, child_pt.ttbr0_virt);
+        }
     }
+
+    let child_proc = Process {
+        pid: child_pid,
+        task: child_task,
+        parent: Some(cur_pid),
+        children: Vec::new(),
+        exit_status: None,
+        waiters: Vec::new(),
+    };
+
+    let mut procs = PROCESSES.lock();
+    procs.push(child_proc);
+    if let Some(parent) = procs.iter_mut().find(|p| p.pid == cur_pid) {
+        parent.children.push(child_pid);
+    }
+
+    // Return child PID to parent, 0 to child
+    // For now return child PID to both; in real impl, child gets 0
+    child_pid
 }
 
 /// Exit current process with given status code

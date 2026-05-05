@@ -1,6 +1,5 @@
-//! ELF64 loader — maps PT_LOAD segments into user page tables
-//! Provides functions to load ELF binaries and set up user-space tasks
 use alloc::vec::Vec;
+use crate::scheduler::Task;
 
 const ELFMAG: [u8; 4] = *b"\x7fELF";
 const ELFCLASS64: u8 = 2;
@@ -37,370 +36,108 @@ struct Elf64Phdr {
     p_align: u64,
 }
 
-/// User stack top address (grows down from here)
-pub const USER_STACK_TOP: u64 = 0x7FFF_FFF0_0000;
-/// Stack size in pages
-pub const USER_STACK_PAGES: usize = 4;
+/// Load an ELF64 executable into a user task's address space
+/// Returns (entry_point, stack_top) on success
+pub fn load_elf_for_task(elf_data: &[u8], task: &mut Task) -> Option<(u64, u64)> {
+    if elf_data.len() < core::mem::size_of::<Elf64Ehdr>() { return None; }
 
-/// Load an ELF64 binary into the given page tables.
-/// Returns (entry_point, stack_top) on success.
-#[cfg(target_arch = "x86_64")]
-pub fn load_elf(
-    data: &[u8],
-    page_tables: &mut crate::arch::x86_64::TaskPageTables,
-) -> Option<(u64, u64)> {
-    load_elf_impl_x86_64(data, page_tables)
-}
+    let hdr = unsafe { &*(elf_data.as_ptr() as *const Elf64Ehdr) };
 
-#[cfg(target_arch = "aarch64")]
-pub fn load_elf(
-    data: &[u8],
-    page_tables: &mut crate::arch::aarch64::TaskPageTables,
-) -> Option<(u64, u64)> {
-    load_elf_impl_aarch64(data, page_tables)
-}
+    // Verify ELF magic, 64-bit, executable
+    if &hdr.e_ident[..4] != &ELFMAG { return None; }
+    if hdr.e_ident[4] != ELFCLASS64 { return None; }
+    if hdr.e_type != ET_EXEC { return None; }
 
-#[cfg(target_arch = "x86_64")]
-fn load_elf_impl_x86_64(
-    data: &[u8],
-    page_tables: &mut crate::arch::x86_64::TaskPageTables,
-) -> Option<(u64, u64)> {
-    if data.len() < core::mem::size_of::<Elf64Ehdr>() { return None; }
-
-    let hdr = unsafe { &*(data.as_ptr() as *const Elf64Ehdr) };
-    if &hdr.e_ident[..4] != &ELFMAG || hdr.e_ident[4] != ELFCLASS64 || hdr.e_type != ET_EXEC {
-        return None;
-    }
-
+    // Verify machine architecture matches current arch
+    #[cfg(target_arch = "x86_64")]
     if hdr.e_machine != 62 { return None; } // EM_X86_64
-
-    let ph_off = hdr.e_phoff as usize;
-    let ph_size = core::mem::size_of::<Elf64Phdr>();
-
-    // Collect PT_LOAD segments
-    let mut segments: Vec<(u64, u64, u64, u64, u32)> = Vec::new();
-    for i in 0..hdr.e_phnum {
-        let off = ph_off + (i as usize) * ph_size;
-        if off + ph_size > data.len() { break; }
-        let ph = unsafe { &*(data.as_ptr().add(off) as *const Elf64Phdr) };
-        if ph.p_type == PT_LOAD {
-            segments.push((ph.p_vaddr, ph.p_offset, ph.p_filesz, ph.p_memsz, ph.p_flags));
-        }
-    }
-
-    // Map each PT_LOAD segment
-    for (vaddr, file_offset, filesz, memsz, flags) in segments.iter() {
-        let writable = (*flags & 2) != 0;
-        let start_page = *vaddr & !0xFFF;
-        let end_page = (*vaddr + *memsz + 0xFFF) & !0xFFF;
-
-        let mut current_vaddr = start_page;
-        let mut remaining = *memsz;
-        let mut foff = *file_offset;
-        let mut file_remaining = *filesz;
-
-        while current_vaddr < end_page && remaining > 0 {
-            let frame_phys = crate::arch::x86_64::map_user_page(page_tables, current_vaddr, writable)?;
-
-            let copy_size = core::cmp::min(4096u64, remaining) as usize;
-            let file_copy = core::cmp::min(copy_size as u64, file_remaining) as usize;
-
-            let frame_ptr = frame_phys as *mut u8;
-
-            if file_copy > 0 {
-                let src_off = (foff + (current_vaddr - start_page)) as usize;
-                if src_off + file_copy <= data.len() {
-                    unsafe {
-                        core::ptr::copy_nonoverlapping(
-                            data.as_ptr().add(src_off),
-                            frame_ptr,
-                            file_copy,
-                        );
-                    }
-                }
-            }
-
-            if file_copy < copy_size {
-                unsafe {
-                    core::ptr::write_bytes(frame_ptr.add(file_copy), 0, copy_size - file_copy);
-                }
-            }
-
-            current_vaddr += 4096;
-            remaining = remaining.saturating_sub(4096);
-            if file_remaining > 4096 {
-                file_remaining -= 4096;
-            } else {
-                file_remaining = 0;
-            }
-        }
-    }
-
-    let stack_top = setup_user_stack_x86_64(page_tables)?;
-    Some((hdr.e_entry, stack_top))
-}
-
-#[cfg(target_arch = "aarch64")]
-fn load_elf_impl_aarch64(
-    data: &[u8],
-    page_tables: &mut crate::arch::aarch64::TaskPageTables,
-) -> Option<(u64, u64)> {
-    if data.len() < core::mem::size_of::<Elf64Ehdr>() { return None; }
-
-    let hdr = unsafe { &*(data.as_ptr() as *const Elf64Ehdr) };
-    if &hdr.e_ident[..4] != &ELFMAG || hdr.e_ident[4] != ELFCLASS64 || hdr.e_type != ET_EXEC {
-        return None;
-    }
-
+    #[cfg(target_arch = "aarch64")]
     if hdr.e_machine != 183 { return None; } // EM_AARCH64
 
+    let entry = hdr.e_entry;
     let ph_off = hdr.e_phoff as usize;
-    let ph_size = core::mem::size_of::<Elf64Phdr>();
+    let ph_size = core::mem::size_of::<Elf64Phdr>() as u64;
 
-    let mut segments: Vec<(u64, u64, u64, u64, u32)> = Vec::new();
-    for i in 0..hdr.e_phnum {
-        let off = ph_off + (i as usize) * ph_size;
-        if off + ph_size > data.len() { break; }
-        let ph = unsafe { &*(data.as_ptr().add(off) as *const Elf64Phdr) };
-        if ph.p_type == PT_LOAD {
-            segments.push((ph.p_vaddr, ph.p_offset, ph.p_filesz, ph.p_memsz, ph.p_flags));
+    // User stack top (in user address space)
+    #[cfg(target_arch = "x86_64")]
+    let stack_top: u64 = 0x7FFFFFFFF000; // Top of user space for x86_64
+    #[cfg(target_arch = "aarch64")]
+    let stack_top: u64 = 0x0000FFFFFFFFF000; // Top of user space for aarch64
+
+    // Map user stack pages (4 pages = 16KB stack)
+    if let Some(ref mut pt) = task.page_tables {
+        for i in 0..4 {
+            let stack_page_vaddr = stack_top - (i as u64 + 1) * 4096;
+            unsafe {
+                #[cfg(target_arch = "x86_64")]
+                let _ = crate::arch::x86_64::map_user_page_for_task(pt, stack_page_vaddr, true);
+                #[cfg(target_arch = "aarch64")]
+                let _ = crate::arch::aarch64::map_user_page_for_task(pt, stack_page_vaddr, true);
+            }
         }
     }
 
-    for (vaddr, file_offset, filesz, memsz, flags) in segments.iter() {
-        let writable = (*flags & 2) != 0;
-        let start_page = *vaddr & !0xFFF;
-        let end_page = (*vaddr + *memsz + 0xFFF) & !0xFFF;
+    // Process each program header
+    for i in 0..hdr.e_phnum {
+        let off = ph_off + (i as u64 * ph_size) as usize;
+        if off + ph_size as usize > elf_data.len() { break; }
 
-        let mut current_vaddr = start_page;
-        let mut remaining = *memsz;
-        let mut foff = *file_offset;
-        let mut file_remaining = *filesz;
+        let ph = unsafe { &*(elf_data.as_ptr().add(off) as *const Elf64Phdr) };
 
-        while current_vaddr < end_page && remaining > 0 {
-            let frame_phys = crate::arch::aarch64::map_user_page(page_tables, current_vaddr, writable)?;
+        if ph.p_type != PT_LOAD { continue; }
 
-            let copy_size = core::cmp::min(4096u64, remaining) as usize;
-            let file_copy = core::cmp::min(copy_size as u64, file_remaining) as usize;
+        let vaddr = ph.p_vaddr;
+        let filesz = ph.p_filesz;
+        let memsz = ph.p_memsz;
+        let offset = ph.p_offset;
 
-            let frame_ptr = frame_phys as *mut u8;
+        // Map pages for this segment
+        let page_start = vaddr & !0xFFF;
+        let page_end = (vaddr + memsz + 4095) & !0xFFF;
 
-            if file_copy > 0 {
-                let src_off = (foff + (current_vaddr - start_page)) as usize;
-                if src_off + file_copy <= data.len() {
-                    unsafe {
-                        core::ptr::copy_nonoverlapping(
-                            data.as_ptr().add(src_off),
-                            frame_ptr,
-                            file_copy,
-                        );
+        for page_vaddr in (page_start..page_end).step_by(4096) {
+            if let Some(ref mut pt) = task.page_tables {
+                // Allocate physical frame and map it
+                let frame_opt = unsafe {
+                    #[cfg(target_arch = "x86_64")]
+                    let frame = crate::arch::x86_64::map_user_page_for_task(pt, page_vaddr, true);
+                    #[cfg(target_arch = "aarch64")]
+                    let frame = crate::arch::aarch64::map_user_page_for_task(pt, page_vaddr, true);
+                    frame
+                };
+                if let Some(frame_phys) = frame_opt {
+                    // Copy data to this page
+                    let page_offset = page_vaddr - page_start;
+                    let copy_start = offset + page_offset;
+                    let copy_len = core::cmp::min(4096, filesz.saturating_sub(page_offset));
+
+                    if copy_start < elf_data.len() as u64 && copy_len > 0 {
+                        let src_start = core::cmp::min(copy_start as usize, elf_data.len());
+                        let copy_amount = core::cmp::min(copy_len as usize, elf_data.len() - src_start);
+
+                        unsafe {
+                            core::ptr::copy_nonoverlapping(
+                                elf_data.as_ptr().add(src_start),
+                                frame_phys as *mut u8,
+                                copy_amount,
+                            );
+                        }
                     }
                 }
             }
-
-            if file_copy < copy_size {
-                unsafe {
-                    core::ptr::write_bytes(frame_ptr.add(file_copy), 0, copy_size - file_copy);
-                }
-            }
-
-            current_vaddr += 4096;
-            remaining = remaining.saturating_sub(4096);
-            if file_remaining > 4096 {
-                file_remaining -= 4096;
-            } else {
-                file_remaining = 0;
-            }
         }
     }
 
-    let stack_top = setup_user_stack_aarch64(page_tables)?;
-    Some((hdr.e_entry, stack_top))
+    log::info!("ELF loaded: entry={:#x}, stack_top={:#x}", entry, stack_top);
+    Some((entry, stack_top))
 }
 
-/// Set up user stack for x86_64
-#[cfg(target_arch = "x86_64")]
-pub fn setup_user_stack_x86_64(page_tables: &mut crate::arch::x86_64::TaskPageTables) -> Option<u64> {
-    for i in 0..USER_STACK_PAGES {
-        let vaddr = USER_STACK_TOP - ((i as u64 + 1) * 4096);
-        crate::arch::x86_64::map_user_page(page_tables, vaddr, true)?;
+/// Simple ELF loader that just parses and returns info (used for testing)
+pub fn load_elf(data: &[u8]) -> Option<u64> {
+    if data.len() < core::mem::size_of::<Elf64Ehdr>() { return None; }
+    let hdr = unsafe { &*(data.as_ptr() as *const Elf64Ehdr) };
+    if &hdr.e_ident[..4] != &ELFMAG || hdr.e_ident[4] != ELFCLASS64 || hdr.e_type != ET_EXEC {
+        return None;
     }
-    Some(USER_STACK_TOP)
-}
-
-#[cfg(target_arch = "aarch64")]
-pub fn setup_user_stack_aarch64(page_tables: &mut crate::arch::aarch64::TaskPageTables) -> Option<u64> {
-    for i in 0..USER_STACK_PAGES {
-        let vaddr = USER_STACK_TOP - ((i as u64 + 1) * 4096);
-        crate::arch::aarch64::map_user_page(page_tables, vaddr, true)?;
-    }
-    Some(USER_STACK_TOP)
-}
-
-/// Prepare a user task to enter user mode (x86_64).
-#[cfg(target_arch = "x86_64")]
-pub fn prepare_user_task(
-    task: &mut crate::scheduler::Task,
-    entry: usize,
-    stack_top: usize,
-    pml4_phys: usize,
-) {
-    let mut sp = task.stack as usize + crate::scheduler::STACK_SIZE;
-
-    // Build an iretq frame on the task stack
-    // iretq pops: RIP, CS, RFLAGS, RSP, SS
-
-    // SS (ring 3 data segment = 0x23)
-    sp -= core::mem::size_of::<usize>();
-    unsafe { *(sp as *mut usize) = 0x23usize; }
-
-    // RSP (user stack top)
-    sp -= core::mem::size_of::<usize>();
-    unsafe { *(sp as *mut usize) = stack_top; }
-
-    // RFLAGS (interrupts enabled = 0x202)
-    sp -= core::mem::size_of::<usize>();
-    unsafe { *(sp as *mut usize) = 0x202usize; }
-
-    // CS (ring 3 code segment = 0x1B)
-    sp -= core::mem::size_of::<usize>();
-    unsafe { *(sp as *mut usize) = 0x1Bu64 as usize; }
-
-    // RIP (entry point)
-    sp -= core::mem::size_of::<usize>();
-    unsafe { *(sp as *mut usize) = entry; }
-
-    // Address of iretq stub
-    sp -= core::mem::size_of::<usize>();
-    unsafe { *(sp as *mut usize) = iretq_stub_x86_64 as usize; }
-
-    // Callee-saved regs (will be popped by switch_context)
-    for _ in 0..6 {
-        sp -= core::mem::size_of::<usize>();
-        unsafe { *(sp as *mut usize) = 0; }
-    }
-
-    task.context.rsp = sp;
-}
-
-/// Prepare a user task to enter user mode (aarch64).
-#[cfg(target_arch = "aarch64")]
-pub fn prepare_user_task(
-    task: &mut crate::scheduler::Task,
-    entry: usize,
-    stack_top: usize,
-    ttbr0_phys: usize,
-) {
-    let mut sp = task.stack as usize + crate::scheduler::STACK_SIZE;
-
-    // Push arguments for eret stub: entry, stack_top, ttbr0_phys
-    sp -= core::mem::size_of::<usize>();
-    unsafe { *(sp as *mut usize) = ttbr0_phys; }
-    sp -= core::mem::size_of::<usize>();
-    unsafe { *(sp as *mut usize) = stack_top; }
-    sp -= core::mem::size_of::<usize>();
-    unsafe { *(sp as *mut usize) = entry; }
-
-    // Push address of eret_stub_aarch64
-    sp -= core::mem::size_of::<usize>();
-    unsafe { *(sp as *mut usize) = eret_stub_aarch64 as usize; }
-
-    // Callee-saved regs x19-x28, x29(fp), x30(lr)
-    for _ in 0..11 {
-        sp -= core::mem::size_of::<usize>();
-        unsafe { *(sp as *mut usize) = 0; }
-    }
-
-    task.context.rsp = sp;
-}
-
-/// x86_64 stub that does iretq (used as "return address" for user tasks)
-#[cfg(target_arch = "x86_64")]
-#[unsafe(naked)]
-extern "C" fn iretq_stub_x86_64() -> ! {
-    unsafe {
-        core::arch::naked_asm!("iretq");
-    }
-}
-
-/// aarch64 stub that sets up EL0 and does eret
-#[cfg(target_arch = "aarch64")]
-#[unsafe(naked)]
-extern "C" fn eret_stub_aarch64() -> ! {
-    unsafe {
-        core::arch::naked_asm!(
-            "ldr x0, [sp], #8",        // entry
-            "ldr x1, [sp], #8",        // stack_top
-            "ldr x2, [sp], #8",        // ttbr0_phys
-            "msr ttbr0_el1, x2",
-            "isb",
-            "msr elr_el1, x0",
-            "msr sp_el0, x1",
-            "mov x3, #0",
-            "msr spsr_el1, x3",
-            "eret",
-        );
-    }
-}
-
-/// Exec syscall: load ELF binary from file path and replace current process
-pub fn exec(path_ptr: *const u8, len: usize) -> usize {
-    // Copy path from user space
-    if len == 0 || len > 256 {
-        return 0xFFFF;
-    }
-    let mut path_buf = alloc::vec![0u8; len];
-    unsafe {
-        crate::syscalls::copy_from_user(&mut path_buf, path_ptr as usize);
-    }
-    let path = match core::str::from_utf8(&path_buf) {
-        Ok(s) => s,
-        Err(_) => return 0xFFFE,
-    };
-
-    // Read ELF file from filesystem
-    let data = match crate::fs::read_file(path) {
-        Ok(d) => d,
-        Err(_) => return 0xFFFC,
-    };
-
-    // Get current process
-    let pid = crate::scheduler::current_task_id();
-    let mut procs = crate::scheduler::get_processes();
-
-    let task_idx = match procs.iter().position(|p| p.pid == pid) {
-        Some(idx) => idx,
-        None => return 0xFFFB,
-    };
-
-    let task = &mut procs[task_idx].task;
-    let page_tables = match task.page_tables.as_mut() {
-        Some(pt) => pt,
-        None => return 0xFFFA,
-    };
-
-    // Load ELF
-    let (entry, stack_top) = match load_elf(&data, page_tables) {
-        Some((e, s)) => (e, s),
-        None => return 0xFFF9,
-    };
-
-    // Get page table root
-    #[cfg(target_arch = "x86_64")]
-    let pt_root = page_tables.pml4_phys;
-    #[cfg(target_arch = "aarch64")]
-    let pt_root = page_tables.ttbr0_phys;
-
-    // Prepare user task to jump to entry point
-    prepare_user_task(task, entry as usize, stack_top as usize, pt_root);
-
-    // Update task entry point
-    task.entry = entry as usize;
-
-    // yield to let the scheduler switch to us (we'll enter user mode)
-    drop(procs);
-    crate::scheduler::yield_cpu();
-
-    // Should not reach here - we enter user mode instead
-    0
+    Some(hdr.e_entry)
 }
