@@ -1,31 +1,9 @@
 //! Vibe Coded OS — Kernel Entry Point
 #![no_std]
 #![no_main]
-#![cfg_attr(target_arch = "x86_64", feature(abi_x86_interrupt))]
-
-use core::arch::global_asm;
-
-#[cfg(target_arch = "aarch64")]
-global_asm!(
-    include_str!("arch/vector_table_aarch64.s"),
-);
-
-#[cfg(target_arch = "x86_64")]
-core::arch::global_asm!(
-    include_str!("arch/syscall_x86_64.s"),
-    include_str!("arch/switch_x86_64.s"),
-);
-
-#[cfg(target_arch = "aarch64")]
-core::arch::global_asm!(
-    include_str!("arch/switch_aarch64.s"),
-);
-
-extern crate alloc;
 
 use core::panic::PanicInfo;
-
-pub use common::{BootInfo, FramebufferInfo, MemoryRegion, MemoryRegionKind};
+use log::info;
 
 mod arch;
 mod mm;
@@ -46,69 +24,30 @@ use arch::x86_64 as arch_impl;
 
 #[cfg(target_arch = "aarch64")]
 use arch::aarch64 as arch_impl;
+mod userland;
+mod syscalls;
+mod net;
+mod compat;
 
-/// Draw the macOS-like desktop UI
-fn draw_desktop() {
-    use drivers::fbcon;
-    unsafe {
-        let w = fbcon::fb_width();
-        let h = fbcon::fb_height();
-
-        // Background gradient (dark blue to darker blue, like macOS)
-        fbcon::fill_rect_v_gradient(0, 0, w, h, 0x001a3a, 0x000a1a);
-
-        // Top menu bar - dark translucent
-        let bar_h = 28;
-        fbcon::fill_rect_v_gradient(0, 0, w, bar_h, 0x1a1a2e, 0x12121e);
-        // Bottom border of menu bar
-        fbcon::draw_hline(0, bar_h, w, 0x333344);
-
-        // Menu bar text
-        fbcon::draw_str(8, 6, "VibeOS", 0xffffff);
-        fbcon::draw_str(80, 6, "Finder", 0xffffff);
-        fbcon::draw_str(150, 6, "File", 0xd0d0d0);
-        fbcon::draw_str(190, 6, "Edit", 0xd0d0d0);
-        fbcon::draw_str(230, 6, "View", 0xd0d0d0);
-        fbcon::draw_str(275, 6, "Go", 0xd0d0d0);
-        fbcon::draw_str(300, 6, "Window", 0xd0d0d0);
-        fbcon::draw_str(360, 6, "Help", 0xd0d0d0);
-
-        // Clock (right side)
-        fbcon::draw_str(w - 80, 6, "04:20", 0xd0d0d0);
-
-        // Dock area - translucent bar at bottom
-        let dock_y = h - 80;
-        let dock_h = 70;
-        let dock_x = (w - 500) / 2;
-        let dock_w = 500;
-
-        // Dock background
-        fbcon::fill_rounded_rect(dock_x, dock_y, dock_w, dock_h, 16, 0x2a2a3a80);
-
-        // Dock separator line
-        fbcon::draw_hline(dock_x + 2, dock_y + 2, dock_w - 4, 0x44445580);
-
-        // Dock app icons (colored squares with labels)
-        let icon_size = 48;
-        let icons = [
-            (0x007aff, "Finder"),
-            (0x34c759, "Terminal"),
-            (0xff9500, "Settings"),
-            (0xff3b30, "Activity"),
-            (0x5856d6, "Browser"),
-        ];
-        let icon_spacing = 12;
-        let start_x = dock_x + 16;
-        for (i, (color, _label)) in icons.iter().enumerate() {
-            let ix = start_x + i * (icon_size + icon_spacing);
-            let iy = dock_y + 8;
-            // Icon shadow
-            fbcon::fill_rounded_rect(ix + 2, iy + 4, icon_size, icon_size, 8, 0x00000040);
-            // Icon
-            fbcon::fill_rounded_rect(ix, iy, icon_size, icon_size, 8, *color);
-            // Icon highlight (top half slightly lighter)
-            fbcon::fill_rounded_rect(ix, iy, icon_size, icon_size / 2, 8, 0xffffff20);
-        }
+#[no_mangle]
+pub extern "C" fn kernel_main() -> ! {
+    drivers::init();
+    info!("VibeOS kernel starting...");
+    
+    arch::init();
+    scheduler::init();
+    input::init();
+    ipc::init();
+    shm::init();
+    fs::init();
+    userland::init();
+    syscalls::init();
+    net::init();
+    compat::init();
+    
+    info!("VibeOS kernel initialized, entering main loop");
+    scheduler::run();
+}
 
         // Sample window
         let win_x = 100;
@@ -448,6 +387,55 @@ pub extern "C" fn kernel_main(boot_info: *mut BootInfo) -> ! {
 
     drivers::uart::init();
     drivers::uart_logger::init();
+    info!("kernel_main entered");
+
+    if !bi.framebuffer.is_null() {
+        unsafe { drivers::fbcon::init(&*bi.framebuffer); }
+        info!("framebuffer initialized: {}x{}",
+            unsafe { drivers::fbcon::fb_width() },
+            unsafe { drivers::fbcon::fb_height() });
+    }
+
+    arch_impl::init(unsafe { &mut *boot_info });
+    mm::init(mem_map);
+    input::init();
+    drivers::cursor::init();
+
+    #[cfg(target_arch = "x86_64")]
+    drivers::ps2mouse::init();
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        // KMI devices are optional on QEMU virt - require explicit -device pl050
+        // Keyboard input is available via PL011 UART console
+        log::info!("aarch64: KMI devices not initialized (use -device pl050 to enable)");
+    }
+
+    scheduler::init();
+    ipc::init();
+    shm::init();
+    compat::init();
+    fs::init();
+    userland::init();
+    syscalls::init();
+    net::init();
+
+    info!("Spawning GUI and shell tasks.");
+    scheduler::spawn(gui_task);
+    scheduler::spawn(shell_task);
+    info!("Tasks spawned, running scheduler.");
+    scheduler::run_scheduler();
+}
+    }
+    let bi = unsafe { &*boot_info };
+    let mem_map = if bi.memory_map_ptr.is_null() || bi.memory_map_len == 0 {
+        &[] as &[MemoryRegion]
+    } else {
+        unsafe { core::slice::from_raw_parts(bi.memory_map_ptr, bi.memory_map_len) }
+    };
+
+    drivers::uart::init();
+    drivers::uart_logger::init();
     log::info!("kernel_main entered");
 
     if !bi.framebuffer.is_null() {
@@ -479,7 +467,6 @@ pub extern "C" fn kernel_main(boot_info: *mut BootInfo) -> ! {
     fs::init();
     userland::init();
     syscalls::init();
-    net::init();
 
     log::info!("Spawning GUI and shell tasks.");
     scheduler::spawn(gui_task);
