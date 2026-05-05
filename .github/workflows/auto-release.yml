@@ -46,11 +46,7 @@ jobs:
         run: |
           NEW_VER=${{ needs.bump-version.outputs.new_version }}
           sed -i "s/^version = \".*\"/version = \"${NEW_VER}\"/" Cargo.toml
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml
-          git commit -m "chore: bump version to ${{ needs.bump-version.outputs.new_version }}"
-          git push
+          echo "Version set to ${NEW_VER}"
 
       - name: Install Rust nightly
         uses: dtolnay/rust-toolchain@nightly
@@ -82,6 +78,20 @@ jobs:
     needs: [bump-version, build]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Commit version bump
+        run: |
+          NEW_VER=${{ needs.bump-version.outputs.new_version }}
+          sed -i "s/^version = \".*\"/version = \"${NEW_VER}\"/" Cargo.toml
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml
+          git commit -m "chore: bump version to ${{ needs.bump-version.outputs.new_version }}"
+          git push
+
       - name: Download x86_64 artifacts
         uses: actions/download-artifact@v4
         with:
