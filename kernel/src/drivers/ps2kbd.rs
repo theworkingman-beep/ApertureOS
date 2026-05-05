@@ -132,17 +132,27 @@ fn wait_kb_ready() {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
 #[inline]
 unsafe fn outb(port: u16, value: u8) {
     core::arch::asm!("outb %al, %dx", in("al") value, in("dx") port);
 }
 
+#[cfg(target_arch = "x86_64")]
 #[inline]
 unsafe fn inb(port: u16) -> u8 {
     let result: u8;
     core::arch::asm!("inb %dx, %al", in("dx") port, out("al") result);
     result
 }
+
+#[cfg(not(target_arch = "x86_64"))]
+#[inline]
+unsafe fn outb(_port: u16, _value: u8) {}
+
+#[cfg(not(target_arch = "x86_64"))]
+#[inline]
+unsafe fn inb(_port: u16) -> u8 { 0 }
 
 /// End-of-interrupt signal to PIC
 pub unsafe fn eoi() {

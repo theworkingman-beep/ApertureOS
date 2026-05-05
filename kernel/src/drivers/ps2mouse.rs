@@ -149,15 +149,23 @@ pub fn get_mouse_state() -> MouseState {
     *MOUSE_STATE.lock()
 }
 
+#[cfg(target_arch = "x86_64")]
 unsafe fn outb(port: u16, value: u8) {
     core::arch::asm!("out dx, al", in("al") value, in("dx") port);
 }
 
+#[cfg(target_arch = "x86_64")]
 unsafe fn inb(port: u16) -> u8 {
     let result: u8;
     core::arch::asm!("in al, dx", in("dx") port, out("al") result);
     result
 }
+
+#[cfg(not(target_arch = "x86_64"))]
+unsafe fn outb(_port: u16, _value: u8) {}
+
+#[cfg(not(target_arch = "x86_64"))]
+unsafe fn inb(_port: u16) -> u8 { 0 }
 
 fn wait_kb_ready() {
     unsafe {

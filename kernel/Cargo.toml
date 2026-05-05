@@ -6,7 +6,7 @@ edition.workspace = true
 [dependencies]
 hal = { path = "../hal" }
 common = { path = "../common" }
-spin = "0.9"
+spin = { version = "0.9", features = ["mutex"] }
 bitflags = "2.4"
 linked_list_allocator = "0.10"
 log = { version = "0.4", default-features = false }

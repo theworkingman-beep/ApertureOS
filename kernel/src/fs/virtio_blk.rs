@@ -90,9 +90,8 @@ unsafe fn pci_read_config(offset: u32) -> u32 {
     {
         let val: u32;
         core::arch::asm!(
-            "mov dx, {port}",
             "in eax, dx",
-            port = in(reg) (0xCF8 | (offset & 0xFC)) as u16,
+            in("dx") (0xCF8 | (offset & 0xFC)) as u16,
             out("eax") val,
             options(nomem, nostack)
         );
@@ -100,7 +99,9 @@ unsafe fn pci_read_config(offset: u32) -> u32 {
     }
     #[cfg(target_arch = "aarch64")]
     {
-        read_volatile(0x0A000000 as *const u32)
+        // aarch64 uses memory-mapped PCI config space
+        // For QEMU virt, this would be at a different address
+        0
     }
 }
 
@@ -108,16 +109,16 @@ unsafe fn pci_write_config(offset: u32, val: u32) {
     #[cfg(target_arch = "x86_64")]
     {
         core::arch::asm!(
-            "mov dx, {port}",
             "out dx, eax",
-            port = in(reg) (0xCF8 | (offset & 0xFC)) as u16,
+            in("dx") (0xCF8 | (offset & 0xFC)) as u16,
             in("eax") val,
             options(nomem, nostack)
         );
     }
     #[cfg(target_arch = "aarch64")]
     {
-        write_volatile(0x0A000000 as *mut u32, val);
+        // aarch64 uses memory-mapped PCI config space
+        // For QEMU virt, this would be at a different address
     }
 }
 
