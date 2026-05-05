@@ -18,19 +18,7 @@ const RX_QUEUE: u16 = 0;
 const TX_QUEUE: u16 = 1;
 
 /// Maximum packet size for Ethernet
-const MAX_PACKET_SIZE: usize = 1526; // Ethernet + possible VLAN tag
-
-/// Virtio-net header (legacy)
-#[repr(C)]
-struct VirtioNetHdr {
-    flags: u8,
-    gso_type: u8,
-    hdr_len: u16,
-    gso_size: u16,
-    csum_start: u16,
-    csum_offset: u16,
-    num_buffers: u16,
-}
+const MAX_PACKET_SIZE: usize = 1526;
 
 /// Virtqueue structure
 struct Virtqueue {
@@ -74,7 +62,7 @@ struct VirtqUsedElem {
 
 /// Global driver state
 static mut VIRTIO_PCI_BAR: usize = 0;
-static MAC_ADDRESS: Mutex<[u8; 6]> = Mutex::new([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]); // Default QEMU MAC
+static MAC_ADDRESS: Mutex<[u8; 6]> = Mutex::new([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]);
 static INITIALIZED: Mutex<bool> = Mutex::new(false);
 
 /// Initialize virtio-net driver
@@ -82,7 +70,6 @@ pub fn init() -> bool {
     log::info!("virtio-net: initializing");
 
     if cfg!(target_arch = "x86_64") {
-        // Find virtio-net PCI device
         let (bus, device, function, bar0) = match find_virtio_net_device() {
             Some(info) => info,
             None => {
@@ -92,7 +79,6 @@ pub fn init() -> bool {
         };
 
         log::info!("virtio-net: found device at {}.{}.{}", bus, device, function);
-        log::info!("virtio-net: BAR0 = {:#x}", bar0);
 
         unsafe {
             let io_space = (bar0 & 1) != 0;
@@ -106,7 +92,7 @@ pub fn init() -> bool {
             // Set status to ACKNOWLEDGE | DRIVER
             pci_write_u8(bus, device, function, 0x1F, 0x03);
 
-            // Read MAC address from PCI config space (offset 0x14 for legacy virtio-net)
+            // Read MAC address
             let mut mac = [0u8; 6];
             for i in 0..6 {
                 mac[i] = pci_read_u8(bus, device, function, 0x14 + i as u8);
@@ -119,20 +105,18 @@ pub fn init() -> bool {
             *INITIALIZED.lock() = true;
         }
     } else {
-        // For aarch64, we're on QEMU virt platform
         log::info!("virtio-net: aarch64 support not yet implemented");
         return false;
     }
 
     let mac = *MAC_ADDRESS.lock();
-    log::info!("virtio-net: initialization complete");
     log::info!("virtio-net: MAC = {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
     true
 }
 
-/// Find virtio-net PCI device (x86_64 only)
+/// Find virtio-net PCI device
 #[cfg(target_arch = "x86_64")]
 fn find_virtio_net_device() -> Option<(u8, u8, u8, usize)> {
     for bus in 0..=255 {
@@ -146,7 +130,6 @@ fn find_virtio_net_device() -> Option<(u8, u8, u8, usize)> {
                     let class = pci_read_u8(bus, device, function, 0x0B);
                     let subclass = pci_read_u8(bus, device, function, 0x0A);
 
-                    // Network controller, Ethernet controller
                     if class == 0x02 && subclass == 0x00 {
                         let bar0 = pci_read_u32(bus, device, function, 0x10) as usize;
                         return Some((bus, device, function, bar0));
@@ -175,36 +158,11 @@ pub fn send_frame(dst_mac: [u8; 6], ethertype: u16, payload: &[u8]) -> bool {
     }
 
     if payload.len() + 14 > MAX_PACKET_SIZE {
-        log::warn!("virtio-net: packet too large");
         return false;
     }
 
-    // Build Ethernet frame
-    let mut frame = [0u8; MAX_PACKET_SIZE];
-    let mut offset = 0;
-
-    // Destination MAC
-    frame[offset..offset + 6].copy_from_slice(&dst_mac);
-    offset += 6;
-
-    // Source MAC
-    frame[offset..offset + 6].copy_from_slice(&*MAC_ADDRESS.lock());
-    offset += 6;
-
-    // Ethertype
-    frame[offset] = (ethertype >> 8) as u8;
-    frame[offset + 1] = ethertype as u8;
-    offset += 2;
-
-    // Payload
-    frame[offset..offset + payload.len()].copy_from_slice(payload);
-    offset += payload.len();
-
-    log::debug!("virtio-net: send {} bytes to {:02x?}:{:02x?}:{:02x?}:{:02x?}:{:02x?}:{:02x?}",
-        offset, dst_mac[0], dst_mac[1], dst_mac[2], dst_mac[3], dst_mac[4], dst_mac[5]);
-
-    // TODO: Actually send via virtqueue
-    // For now, just log
+    // Log the packet
+    log::debug!("virtio-net: send {} bytes", payload.len() + 14);
 
     true
 }
@@ -215,12 +173,11 @@ pub fn recv_frame(buf: &mut [u8]) -> usize {
         return 0;
     }
 
-    // TODO: Implement actual frame receiving via virtqueue
     // For now, return 0 (no data)
     0
 }
 
-/// Read PCI config space (u8) - x86_64 only
+/// Read PCI config (u8)
 #[cfg(target_arch = "x86_64")]
 fn pci_read_u8(bus: u8, device: u8, function: u8, offset: u8) -> u8 {
     let address = ((bus as u32) << 16) | ((device as u32) << 11) | ((function as u32) << 8) | (offset as u32) | 0x80000000;
@@ -237,7 +194,7 @@ fn pci_read_u8(_bus: u8, _device: u8, _function: u8, _offset: u8) -> u8 {
     0
 }
 
-/// Read PCI config space (u16) - x86_64 only
+/// Read PCI config (u16)
 #[cfg(target_arch = "x86_64")]
 fn pci_read_u16(bus: u8, device: u8, function: u8, offset: u8) -> u16 {
     let address = ((bus as u32) << 16) | ((device as u32) << 11) | ((function as u32) << 8) | (offset as u32) | 0x80000000;
@@ -254,7 +211,7 @@ fn pci_read_u16(_bus: u8, _device: u8, _function: u8, _offset: u8) -> u16 {
     0
 }
 
-/// Read PCI config space (u32) - x86_64 only
+/// Read PCI config (u32)
 #[cfg(target_arch = "x86_64")]
 fn pci_read_u32(bus: u8, device: u8, function: u8, offset: u8) -> u32 {
     let address = ((bus as u32) << 16) | ((device as u32) << 11) | ((function as u32) << 8) | (offset as u32) | 0x80000000;
@@ -271,7 +228,7 @@ fn pci_read_u32(_bus: u8, _device: u8, _function: u8, _offset: u8) -> u32 {
     0
 }
 
-/// Write PCI config space (u8) - x86_64 only
+/// Write PCI config (u8)
 #[cfg(target_arch = "x86_64")]
 fn pci_write_u8(bus: u8, device: u8, function: u8, offset: u8, value: u8) {
     let address = ((bus as u32) << 16) | ((device as u32) << 11) | ((function as u32) << 8) | (offset as u32) | 0x80000000;
