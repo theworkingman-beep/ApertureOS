@@ -458,8 +458,8 @@ pub extern "C" fn kernel_main(boot_info: *mut BootInfo) -> ! {
             unsafe { drivers::fbcon::fb_height() });
     }
 
-    arch_impl::init(unsafe { &mut *boot_info });
     mm::init(mem_map);
+    arch_impl::init(unsafe { &mut *boot_info });
     input::init();
     drivers::cursor::init();
 

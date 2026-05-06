@@ -31,9 +31,10 @@ struct Elf64Phdr { p_type:u32, p_flags:u32, p_offset:u64, p_vaddr:u64, p_paddr:u
 
 fn kind_from_efi(ty: MemoryType) -> MemoryRegionKind {
     match ty {
-        MemoryType::CONVENTIONAL => MemoryRegionKind::Usable,
+        MemoryType::CONVENTIONAL
+        | MemoryType::BOOT_SERVICES_CODE
+        | MemoryType::BOOT_SERVICES_DATA => MemoryRegionKind::Usable,
         MemoryType::LOADER_CODE | MemoryType::LOADER_DATA => MemoryRegionKind::Bootloader,
-        MemoryType::BOOT_SERVICES_CODE | MemoryType::BOOT_SERVICES_DATA => MemoryRegionKind::Bootloader,
         MemoryType::RUNTIME_SERVICES_CODE | MemoryType::RUNTIME_SERVICES_DATA => MemoryRegionKind::Reserved,
         MemoryType::ACPI_RECLAIM | MemoryType::ACPI_NON_VOLATILE => MemoryRegionKind::Reserved,
         _ => MemoryRegionKind::Reserved,

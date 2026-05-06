@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 # Ensure Rust toolchain is on PATH
-export PATH="$HOME/.cargo/bin:$HOME/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/bin:$PATH"
+export PATH="$HOME/.cargo/bin:$HOME/.rustup/toolchains/nightly-aarch64-unknown-linux-gnu/bin:/usr/sbin:$PATH"
 
 TARGET_ARCH="${TARGET_ARCH:-x86_64}"
 MODE="${MODE:-release}"
