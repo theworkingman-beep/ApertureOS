@@ -11,6 +11,7 @@ members = [
     "apps/desktop_shell",
     "apps/sample_app",
     "apps/terminal",
+    "apps/libc",
 ]
 
 default-members = [

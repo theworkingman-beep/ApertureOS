@@ -34,6 +34,22 @@ pub enum Syscall {
     PtysRead = 15,
     PtysWrite = 16,
     SpawnPtyShell = 17,
+    Open = 18,
+    Close = 19,
+    ReadFd = 20,
+    WriteFd = 21,
+    Seek = 22,
+    Fstat = 23,
+    Mkdir = 24,
+    Unlink = 25,
+    Getpid = 26,
+    Dup = 27,
+    Pipe = 28,
+    Mmap = 29,
+    Munmap = 30,
+    Ioctl = 31,
+    Gettimeofday = 32,
+    Nanosleep = 33,
     MachOExec = 0x700,
 }
 
@@ -324,6 +340,105 @@ pub unsafe fn dispatch(n: usize, a1: usize, a2: usize, a3: usize, a4: usize, a5:
             crate::pty::pty_assign_slave(pty_id, child_pid);
             log::info!("syscall: spawn_pty_shell spawned shell pid={} on PTY id={}", child_pid, pty_id);
             child_pid
+        }
+        // SYS_OPEN = 18: open(path_ptr, path_len, flags, mode) -> fd
+        18 => {
+            let pid = crate::scheduler::current_task_id();
+            let result = crate::fs::vfs_ops::sys_open(pid, a1, a2, a3 as u32, a4 as u32);
+            result as usize
+        }
+        // SYS_CLOSE = 19: close(fd) -> 0 or -1
+        19 => {
+            let pid = crate::scheduler::current_task_id();
+            crate::fs::vfs_ops::sys_close(pid, a1) as usize
+        }
+        // SYS_READ_FD = 20: read(fd, buf_ptr, count) -> bytes read
+        20 => {
+            let pid = crate::scheduler::current_task_id();
+            crate::fs::vfs_ops::sys_read(pid, a1, a2, a3) as usize
+        }
+        // SYS_WRITE_FD = 21: write(fd, buf_ptr, count) -> bytes written
+        21 => {
+            let pid = crate::scheduler::current_task_id();
+            crate::fs::vfs_ops::sys_write(pid, a1, a2, a3) as usize
+        }
+        // SYS_SEEK = 22: lseek(fd, offset, whence) -> new offset
+        22 => {
+            let pid = crate::scheduler::current_task_id();
+            crate::fs::vfs_ops::sys_seek(pid, a1, a2 as i64, a3 as u32) as usize
+        }
+        // SYS_FSTAT = 23: fstat(fd, stat_ptr) -> 0 on success
+        23 => {
+            let pid = crate::scheduler::current_task_id();
+            crate::fs::vfs_ops::sys_fstat(pid, a1, a2) as usize
+        }
+        // SYS_MKDIR = 24: mkdir(path_ptr, path_len, mode) -> 0 or -1
+        24 => {
+            let pid = crate::scheduler::current_task_id();
+            crate::fs::vfs_ops::sys_mkdir(pid, a1, a2, a3 as u32) as usize
+        }
+        // SYS_UNLINK = 25: unlink(path_ptr, path_len) -> 0 or -1
+        25 => {
+            let pid = crate::scheduler::current_task_id();
+            crate::fs::vfs_ops::sys_unlink(pid, a1, a2) as usize
+        }
+        // SYS_GETPID = 26: getpid() -> current PID
+        26 => {
+            crate::scheduler::current_task_id()
+        }
+        // SYS_DUP = 27: dup(fd) -> new fd
+        27 => {
+            let pid = crate::scheduler::current_task_id();
+            crate::fs::vfs_ops::sys_dup(pid, a1) as usize
+        }
+        // SYS_PIPE = 28: pipe(pipefd_ptr) -> 0 on success
+        28 => {
+            let pid = crate::scheduler::current_task_id();
+            crate::fs::vfs_ops::sys_pipe(pid, a1) as usize
+        }
+        // SYS_MMAP = 29: mmap(addr, length, prot, flags, fd, offset) -> mapped addr or -1
+        29 => {
+            // Simple mmap: allocate pages using the frame allocator and map into process
+            // For now, return -1 (not fully implemented)
+            log::warn!("syscall: mmap not yet fully implemented");
+            usize::MAX // -1 equivalent for pointer returns
+        }
+        // SYS_MUNMAP = 30: munmap(addr, length) -> 0
+        30 => {
+            // Stub: always return 0
+            0
+        }
+        // SYS_IOCTL = 31: ioctl(fd, request, arg) -> 0 or -1
+        31 => {
+            // Stub: return -1 for most requests
+            log::warn!("syscall: ioctl stub, fd={}", a1);
+            usize::MAX
+        }
+        // SYS_GETTIMEOFDAY = 32: gettimeofday(tv_ptr, tz_ptr) -> 0
+        32 => {
+            let (secs, usecs) = crate::time::uptime_timeval();
+            if a1 != 0 {
+                let tv = a1 as *mut u64;
+                unsafe {
+                    ptr::write(tv, secs);
+                    ptr::write(tv.add(1), usecs);
+                }
+            }
+            0
+        }
+        // SYS_NANOSLEEP = 33: nanosleep(req_ptr, rem_ptr) -> 0
+        33 => {
+            // Cooperative yield for the requested duration (in nanoseconds)
+            // Since we don't have a precise timer, just yield once and return 0
+            // Read the requested time from the user pointer if available
+            if a1 != 0 {
+                // tv_sec at a1, tv_nsec at a1+8
+                let _secs = unsafe { ptr::read(a1 as *const u64) };
+                let _nsecs = unsafe { ptr::read((a1 + 8) as *const u64) };
+                // Simple yield — a real implementation would block for the duration
+                crate::scheduler::yield_cpu();
+            }
+            0
         }
         0x700 => {
             // Mach-O exec

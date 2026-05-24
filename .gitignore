@@ -21,3 +21,4 @@ Thumbs.db
 # Worktrees
 .worktrees/
 target/
+target/.rustc_info.json

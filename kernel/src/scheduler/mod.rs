@@ -2,7 +2,6 @@
 //! Also provides process management (fork, exec, exit, wait, PID allocation)
 #![cfg_attr(target_arch = "aarch64", feature(asm_const))]
 
-use alloc::collections::vec_deque::VecDeque;
 use alloc::vec::Vec;
 use spin::Mutex;
 
@@ -72,6 +71,7 @@ impl Clone for Process {
             children: self.children.clone(),
             exit_status: self.exit_status,
             waiters: self.waiters.clone(),
+            fd_table_init: self.fd_table_init,
         }
     }
 }
@@ -218,6 +218,7 @@ pub struct Process {
     pub children: Vec<usize>,
     pub exit_status: Option<ExitStatus>,
     pub waiters: Vec<usize>,
+    pub fd_table_init: bool, // whether FD table has been created in vfs_ops
 }
 
 unsafe impl Send for Process {}
@@ -253,6 +254,7 @@ pub fn spawn(entry: extern "C" fn() -> !) -> usize {
         children: Vec::new(),
         exit_status: None,
         waiters: Vec::new(),
+        fd_table_init: false,
     };
     PROCESSES.lock().push(proc);
     pid
@@ -270,6 +272,7 @@ pub fn spawn_shell_with_pty(pty_id: usize) -> usize {
         children: Vec::new(),
         exit_status: None,
         waiters: Vec::new(),
+        fd_table_init: false,
     };
     PROCESSES.lock().push(proc);
     // Store PTY ID for the shell entry function to pick up
@@ -300,6 +303,7 @@ pub fn spawn_user(entry: usize) -> usize {
         children: Vec::new(),
         exit_status: None,
         waiters: Vec::new(),
+        fd_table_init: false,
     };
     PROCESSES.lock().push(proc);
     pid
@@ -324,6 +328,7 @@ pub fn spawn_user_from_elf(elf_data: &[u8]) -> usize {
                 children: Vec::new(),
                 exit_status: None,
                 waiters: Vec::new(),
+                fd_table_init: false,
             };
             PROCESSES.lock().push(proc);
             log::info!("spawned user process from ELF: pid={}, entry={:#x}", pid, entry);
@@ -384,6 +389,7 @@ pub fn fork() -> usize {
         children: Vec::new(),
         exit_status: None,
         waiters: Vec::new(),
+        fd_table_init: false,
     };
 
     let mut procs = PROCESSES.lock();

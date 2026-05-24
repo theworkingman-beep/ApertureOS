@@ -25,7 +25,7 @@ extern crate alloc;
 
 use core::panic::PanicInfo;
 
-pub use common::{BootInfo, FramebufferInfo, MemoryRegion, MemoryRegionKind};
+pub use common::{BootInfo, FramebufferInfo, MemoryRegion, MemoryRegionKind, Stat};
 
 mod arch;
 mod mm;
@@ -41,6 +41,7 @@ mod wm;
 mod fs;
 mod net;
 mod pty;
+mod time;
 
 #[cfg(target_arch = "x86_64")]
 use arch::x86_64 as arch_impl;
@@ -493,10 +494,12 @@ pub extern "C" fn kernel_main(boot_info: *mut BootInfo) -> ! {
     shm::init();
     compat::init();
     fs::init();
+    fs::vfs_ops::init();
     userland::init();
     syscalls::init();
     net::init();
     pty::init();
+    time::init();
 
     log::info!("Spawning GUI and shell tasks.");
 

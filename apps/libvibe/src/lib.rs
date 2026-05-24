@@ -22,6 +22,24 @@ pub const SYS_PTYS_READ: usize = 15;
 pub const SYS_PTYS_WRITE: usize = 16;
 pub const SYS_SPAWN_PTY_SHELL: usize = 17;
 
+// New POSIX syscalls
+pub const SYS_OPEN: usize = 18;
+pub const SYS_CLOSE: usize = 19;
+pub const SYS_READ_FD: usize = 20;
+pub const SYS_WRITE_FD: usize = 21;
+pub const SYS_SEEK: usize = 22;
+pub const SYS_FSTAT: usize = 23;
+pub const SYS_MKDIR: usize = 24;
+pub const SYS_UNLINK: usize = 25;
+pub const SYS_GETPID: usize = 26;
+pub const SYS_DUP: usize = 27;
+pub const SYS_PIPE: usize = 28;
+pub const SYS_MMAP: usize = 29;
+pub const SYS_MUNMAP: usize = 30;
+pub const SYS_IOCTL: usize = 31;
+pub const SYS_GETTIMEOFDAY: usize = 32;
+pub const SYS_NANOSLEEP: usize = 33;
+
 // IPC payload size matching kernel/src/ipc.rs
 pub const IPC_PAYLOAD_SIZE: usize = 64;
 
@@ -89,6 +107,40 @@ pub unsafe fn syscall3(n: usize, a1: usize, a2: usize, a3: usize) -> usize {
         inlateout("x0") a1 => ret,
         in("x1") a2,
         in("x2") a3,
+        options(nostack, preserves_flags)
+    );
+    ret
+}
+
+#[cfg(target_arch = "x86_64")]
+pub unsafe fn syscall6(n: usize, a1: usize, a2: usize, a3: usize, a4: usize, a5: usize, a6: usize) -> usize {
+    let ret: usize;
+    core::arch::asm!(
+        "int 0x80",
+        inlateout("rax") n => ret,
+        in("rdi") a1,
+        in("rsi") a2,
+        in("rdx") a3,
+        in("rcx") a4,
+        in("r8") a5,
+        in("r9") a6,
+        options(nostack, preserves_flags)
+    );
+    ret
+}
+
+#[cfg(target_arch = "aarch64")]
+pub unsafe fn syscall6(n: usize, a1: usize, a2: usize, a3: usize, a4: usize, a5: usize, a6: usize) -> usize {
+    let ret: usize;
+    core::arch::asm!(
+        "svc #0",
+        inlateout("x8") n => _,
+        inlateout("x0") a1 => ret,
+        in("x1") a2,
+        in("x2") a3,
+        in("x3") a4,
+        in("x4") a5,
+        in("x5") a6,
         options(nostack, preserves_flags)
     );
     ret

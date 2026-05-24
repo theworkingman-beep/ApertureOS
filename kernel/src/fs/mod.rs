@@ -4,6 +4,8 @@ use alloc::vec::Vec;
 
 pub mod fat32;
 pub mod virtio_blk;
+pub mod vfs_ops;
+pub mod pipe;
 
 pub const MAX_PATH_LEN: usize = 256;
 pub const MAX_OPEN_FILES: usize = 64;
@@ -27,6 +29,7 @@ pub trait FileSystem: Send + Sync {
     fn read(&self, handle: &FileHandle, offset: u32, buf: &mut [u8]) -> Result<usize, FsError>;
 }
 
+#[derive(Debug, Clone)]
 pub struct FileHandle {
     pub ino: u32,
     pub size: u32,
