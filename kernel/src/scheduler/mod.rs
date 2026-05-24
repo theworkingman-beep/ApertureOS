@@ -133,13 +133,23 @@ impl Task {
     }
 
     pub fn init_context(&mut self) {
+        Self::init_context_with_entry_impl(self, self.entry);
+    }
+
+    /// Initialize context with a specific entry point (useful after ELF loading)
+    pub fn init_context_with_entry(&mut self, entry: usize) {
+        self.entry = entry;
+        Self::init_context_with_entry_impl(self, entry);
+    }
+
+    fn init_context_with_entry_impl(&mut self, entry: usize) {
         let mut sp = self.stack_top();
         unsafe {
             // aarch64: push entry FIRST (highest address), then 11 dummies (x19-x29)
             #[cfg(target_arch = "aarch64")]
             {
                 sp -= core::mem::size_of::<usize>();
-                *(sp as *mut usize) = self.entry;
+                *(sp as *mut usize) = entry;
                 for _ in 0..11 {
                     sp -= core::mem::size_of::<usize>();
                     *(sp as *mut usize) = 0;
@@ -150,7 +160,7 @@ impl Task {
             #[cfg(target_arch = "x86_64")]
             {
                 sp -= core::mem::size_of::<usize>();
-                *(sp as *mut usize) = self.entry;
+                *(sp as *mut usize) = entry;
                 for _ in 0..6 {
                     sp -= core::mem::size_of::<usize>();
                     *(sp as *mut usize) = 0;
@@ -263,6 +273,37 @@ pub fn spawn_user(entry: usize) -> usize {
     };
     PROCESSES.lock().push(proc);
     pid
+}
+
+/// Spawn a user-space process from an ELF binary embedded in the kernel.
+/// Loads ELF segments into the process's address space and returns the PID.
+/// Returns 0 on failure.
+pub fn spawn_user_from_elf(elf_data: &[u8]) -> usize {
+    let pid = alloc_pid();
+    let mut task = Task::new_user(pid, 0); // entry=0, will be set by loader
+    task.init_context();
+    match crate::userland::loader::load_elf_for_task(elf_data, &mut task) {
+        Some((entry, _stack_top)) => {
+            task.entry = entry as usize;
+            // Re-initialize context with correct entry point
+            task.init_context_with_entry(entry as usize);
+            let proc = Process {
+                pid,
+                task,
+                parent: *CURRENT_TASK.lock(),
+                children: Vec::new(),
+                exit_status: None,
+                waiters: Vec::new(),
+            };
+            PROCESSES.lock().push(proc);
+            log::info!("spawned user process from ELF: pid={}, entry={:#x}", pid, entry);
+            pid
+        }
+        None => {
+            log::warn!("failed to load ELF for user process");
+            0
+        }
+    }
 }
 
 /// Get current PID

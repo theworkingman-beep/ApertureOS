@@ -168,13 +168,27 @@ fn draw_desktop() {
     }
 }
 
-/// GUI init task — draws the macOS-like desktop and handles input events
+/// Attempt to spawn a user-space application from an embedded ELF binary.
+/// Returns the PID on success, or 0 if the ELF could not be loaded.
+fn spawn_userspace_app(name: &str, elf_data: &[u8]) -> usize {
+    log::info!("Attempting to spawn user-space app: {} ({} bytes)", name, elf_data.len());
+    let pid = scheduler::spawn_user_from_elf(elf_data);
+    if pid == 0 {
+        log::warn!("Failed to load ELF for user-space app: {}", name);
+    } else {
+        log::info!("User-space app '{}' spawned as pid={}", name, pid);
+    }
+    pid
+}
+
+/// Kernel-space GUI fallback task — used when user-space WindowServer is not available
+/// This provides basic desktop rendering as a fallback
 extern "C" fn gui_task() -> ! {
     use drivers::{fbcon, cursor};
     use input::InputEvent;
     use wm::{hit_test, hit_test_dock_icon, HitTarget, TrafficLight, DesktopLayout};
 
-    log::info!("gui_task: starting desktop compositor");
+    log::info!("gui_task: starting kernel-space desktop compositor (fallback)");
 
     let fb_w = unsafe { fbcon::fb_width() };
     let fb_h = unsafe { fbcon::fb_height() };
@@ -483,8 +497,40 @@ pub extern "C" fn kernel_main(boot_info: *mut BootInfo) -> ! {
     net::init();
 
     log::info!("Spawning GUI and shell tasks.");
-    scheduler::spawn(gui_task);
-    scheduler::spawn(shell_task);
+
+    // Attempt to spawn user-space WindowServer and DesktopShell.
+    // When the feature "userspace_gui" is set (via build.rs detecting the ELF binaries),
+    // we embed and spawn the user-space apps. Otherwise fall back to kernel tasks.
+    #[cfg(feature = "userspace_gui")]
+    {
+        let ws_elf = include_bytes!("../../target/vibeos-x86_64/release/windowserver");
+        let shell_elf = include_bytes!("../../target/vibeos-x86_64/release/desktop_shell");
+
+        let ws_pid = spawn_userspace_app("windowserver", ws_elf);
+        let shell_pid = spawn_userspace_app("desktop_shell", shell_elf);
+
+        if ws_pid == 0 {
+            log::warn!("WindowServer ELF load failed, falling back to kernel gui_task");
+            scheduler::spawn(gui_task);
+        } else {
+            log::info!("User-space WindowServer spawned as pid={}", ws_pid);
+        }
+
+        if shell_pid == 0 {
+            log::warn!("DesktopShell ELF load failed, falling back to kernel shell_task");
+            scheduler::spawn(shell_task);
+        } else {
+            log::info!("User-space DesktopShell spawned as pid={}", shell_pid);
+        }
+    }
+
+    #[cfg(not(feature = "userspace_gui"))]
+    {
+        log::info!("User-space GUI binaries not found, using kernel tasks");
+        scheduler::spawn(gui_task);
+        scheduler::spawn(shell_task);
+    }
+
     log::info!("Tasks spawned, running scheduler.");
     scheduler::run_scheduler();
 }

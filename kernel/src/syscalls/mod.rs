@@ -29,6 +29,7 @@ pub enum Syscall {
     ShmCreate = 10,
     ShmMap = 11,
     FramebufferMap = 12,
+    InputPoll = 13,
     MachOExec = 0x700,
 }
 
@@ -138,13 +139,53 @@ pub unsafe fn dispatch(n: usize, a1: usize, a2: usize, a3: usize, a4: usize, a5:
         }
         8 => {
             // ipc_send(target_pid, msg_ptr, msg_size)
-            log::warn!("syscall: ipc_send not fully implemented");
-            0
+            let target = a1;
+            let msg_ptr = a2 as *const u8;
+            let msg_len = a3;
+            if msg_ptr.is_null() || msg_len < 1 {
+                return 0;
+            }
+            // Copy message from user space and build IpcMessage
+            let mut msg = crate::ipc::IpcMessage::new(
+                crate::scheduler::current_task_id(),
+                0, // msg_type from first byte
+            );
+            let copy_len = msg_len.min(crate::ipc::IPC_PAYLOAD_SIZE);
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    msg_ptr,
+                    msg.payload.as_mut_ptr(),
+                    copy_len,
+                );
+            }
+            // Extract msg_type from the first byte of payload (convention)
+            msg.msg_type = msg.payload[0];
+            crate::ipc::send(target, msg);
+            1 // success
         }
         9 => {
-            // ipc_recv(msg_ptr, msg_size) — receive IPC message
-            log::warn!("syscall: ipc_recv not fully implemented");
-            0
+            // ipc_recv(msg_ptr, msg_size) — receive IPC message for current process
+            let buf_ptr = a1 as *mut u8;
+            let buf_len = a2;
+            let my_pid = crate::scheduler::current_task_id();
+            match crate::ipc::recv(my_pid) {
+                Some(msg) => {
+                    if !buf_ptr.is_null() && buf_len >= crate::ipc::IPC_PAYLOAD_SIZE {
+                        unsafe {
+                            core::ptr::copy_nonoverlapping(
+                                msg.payload.as_ptr(),
+                                buf_ptr,
+                                crate::ipc::IPC_PAYLOAD_SIZE,
+                            );
+                        }
+                    }
+                    // Return sender PID in upper bits, msg_type in lower byte
+                    (msg.sender << 8) | (msg.msg_type as usize)
+                }
+                None => {
+                    0 // no message available
+                }
+            }
         }
         10 => {
             // shm_create(size) — create shared memory region
@@ -168,6 +209,59 @@ pub unsafe fn dispatch(n: usize, a1: usize, a2: usize, a3: usize, a4: usize, a5:
                 return 0;
             }
             crate::drivers::fbcon::get_phys_addr()
+        }
+        13 => {
+            // input_poll(buf_ptr) — poll next input event, write to user buffer
+            // Returns 1 if event available, 0 if none
+            // Event is serialized as 8 bytes:
+            //   byte 0: event type (0=MouseMove, 1=MouseDown, 2=MouseUp, 3=KeyPress)
+            //   bytes 1-2: x (u16 LE)
+            //   bytes 3-4: y (u16 LE)
+            //   byte 5: buttons (for MouseMove) or button (for MouseDown/Up) or ascii (for KeyPress)
+            //   bytes 6-7: reserved
+            match crate::input::poll() {
+                Some(event) => {
+                    let buf = a1 as *mut u8;
+                    if !buf.is_null() {
+                        let mut data = [0u8; 8];
+                        match event {
+                            crate::input::InputEvent::MouseMove { x, y, buttons } => {
+                                data[0] = 0;
+                                data[1] = x as u8;
+                                data[2] = (x >> 8) as u8;
+                                data[3] = y as u8;
+                                data[4] = (y >> 8) as u8;
+                                data[5] = buttons;
+                            }
+                            crate::input::InputEvent::MouseDown { button, x, y } => {
+                                data[0] = 1;
+                                data[1] = x as u8;
+                                data[2] = (x >> 8) as u8;
+                                data[3] = y as u8;
+                                data[4] = (y >> 8) as u8;
+                                data[5] = button;
+                            }
+                            crate::input::InputEvent::MouseUp { button, x, y } => {
+                                data[0] = 2;
+                                data[1] = x as u8;
+                                data[2] = (x >> 8) as u8;
+                                data[3] = y as u8;
+                                data[4] = (y >> 8) as u8;
+                                data[5] = button;
+                            }
+                            crate::input::InputEvent::KeyPress { ascii } => {
+                                data[0] = 3;
+                                data[5] = ascii;
+                            }
+                        }
+                        unsafe {
+                            core::ptr::copy_nonoverlapping(data.as_ptr(), buf, 8);
+                        }
+                    }
+                    1 // event available
+                }
+                None => 0,
+            }
         }
         0x700 => {
             // Mach-O exec
