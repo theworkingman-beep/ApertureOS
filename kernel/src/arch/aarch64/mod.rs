@@ -12,9 +12,14 @@ pub fn debug_putchar(_byte: u8) {
     // TODO: PL011 or semihosting output.
 }
 
-/// Halt the CPU.
+/// Halt the CPU until the next interrupt, then return.
+pub fn halt_once() {
+    unsafe { core::arch::asm!("wfe", options(nomem, nostack)) };
+}
+
+/// Halt the CPU forever.
 pub fn hlt() -> ! {
     loop {
-        unsafe { core::arch::asm!("wfe", options(nomem, nostack)) };
+        halt_once();
     }
 }

@@ -18,7 +18,12 @@ pub fn debug_putchar(byte: u8) {
     }
 }
 
-/// Halt the CPU.
+/// Halt the CPU until the next interrupt, then return.
+pub fn halt_once() {
+    x86_64::instructions::hlt();
+}
+
+/// Halt the CPU forever.
 pub fn hlt() -> ! {
     loop {
         x86_64::instructions::hlt();

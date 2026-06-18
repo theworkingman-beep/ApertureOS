@@ -51,4 +51,12 @@ pub fn draw_text(id: Option<WindowId>, text: &str, x: i32, y: i32, color: Color)
     }
 }
 
+/// Fill the window backbuffer with `color`.
+pub fn clear_window(id: Option<WindowId>, color: Color) {
+    let Some(id) = id else { return };
+    if let Some(c) = COMPOSITOR.lock().as_mut() {
+        c.clear_window(id, color);
+    }
+}
+
 pub use color::Color;

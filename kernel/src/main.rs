@@ -52,6 +52,7 @@ mod x86_64_entry {
 
         kernel::win32::self_test();
 
+        let mut win = None;
         if let Some(fb) = boot_info.framebuffer.as_mut() {
             let info: kernel::boot_info::FrameBufferInfo = fb.info().into();
             let len = fb.buffer_mut().len();
@@ -59,7 +60,7 @@ mod x86_64_entry {
                 core::slice::from_raw_parts_mut(fb.buffer_mut().as_mut_ptr(), len)
             };
             kernel::gui::init_compositor(buffer, info);
-            let win = kernel::gui::create_window("Aperture", 100, 100, 320, 240);
+            win = kernel::gui::create_window("Aperture", 100, 100, 320, 240);
             kernel::gui::draw_text(
                 win,
                 "Aperture OS",
@@ -86,8 +87,37 @@ mod x86_64_entry {
             kernel::logln!("No framebuffer available.");
         }
 
-        kernel::logln!("Kernel idle.");
-        kernel::hlt();
+        kernel::logln!("Kernel idle; reading keyboard input.");
+        let mut input = [0u8; 80];
+        let mut input_len = 0usize;
+        loop {
+            while let Some(ch) = kernel::arch::x86_64::interrupts::read_char() {
+                match ch {
+                    '\n' => input_len = 0,
+                    '\u{8}' => {
+                        if input_len > 0 {
+                            input_len -= 1;
+                        }
+                    }
+                    _ => {
+                        if input_len < input.len() && ch.is_ascii() {
+                            input[input_len] = ch.to_ascii_uppercase() as u8;
+                            input_len += 1;
+                        }
+                    }
+                }
+            }
+
+            kernel::gui::clear_window(win, kernel::gui::Color::DARK_GRAY);
+            kernel::gui::draw_text(win, "Aperture OS", 12, 12, kernel::gui::Color::new(0xFF, 0xFF, 0xFF));
+            kernel::gui::draw_text(win, "Hello, world!", 12, 28, kernel::gui::Color::new(0x00, 0xFF, 0x00));
+            let line = core::str::from_utf8(&input[..input_len]).unwrap_or("");
+            kernel::gui::draw_text(win, "Input: ", 12, 50, kernel::gui::Color::new(0xFF, 0xFF, 0xFF));
+            kernel::gui::draw_text(win, line, 60, 50, kernel::gui::Color::new(0x00, 0xFF, 0x00));
+            kernel::gui::render();
+
+            kernel::arch::x86_64::halt_once();
+        }
     }
 
     entry_point!(kernel_main, config = &BOOTLOADER_CONFIG);

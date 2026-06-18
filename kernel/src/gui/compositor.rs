@@ -91,6 +91,14 @@ impl Compositor {
         id
     }
 
+    /// Fill the window backbuffer with `color`.
+    pub fn clear_window(&mut self, id: WindowId, color: Color) {
+        if let Some(window) = self.window_mut(id) {
+            let pixels = unsafe { core::slice::from_raw_parts_mut(window.backbuffer, window.pixel_count) };
+            pixels.fill(color);
+        }
+    }
+
     /// Return a mutable reference to the window with the given id.
     pub fn window_mut(&mut self, id: WindowId) -> Option<&mut Window> {
         self.windows.iter_mut().find_map(|w| {
