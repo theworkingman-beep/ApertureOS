@@ -3,7 +3,7 @@
 //! A simple software-rendered compositor. In the future this will support
 //! hardware acceleration and a GPU-driven scene graph.
 
-use bootloader_api::info::FrameBufferInfo;
+use crate::boot_info::FrameBufferInfo;
 use spin::Mutex;
 
 pub mod color;

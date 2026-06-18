@@ -2,6 +2,7 @@
 #![cfg_attr(test, no_main)]
 
 pub mod arch;
+pub mod boot_info;
 pub mod gui;
 pub mod logger;
 pub mod mm;

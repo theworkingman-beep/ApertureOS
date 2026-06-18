@@ -4,7 +4,7 @@
 //! allocator for early kernel heap use. A proper page allocator will replace
 //! the bump allocator once the MMU is configured per-architecture.
 
-use bootloader_api::info::{MemoryRegion, MemoryRegionKind};
+use crate::boot_info::{MemoryRegion, MemoryRegionKind};
 use core::sync::atomic::{AtomicUsize, Ordering};
 use spin::Mutex;
 

@@ -5,12 +5,21 @@ edition = "2021"
 authors = ["Aperture OS Team"]
 
 [dependencies]
-bootloader_api = "0.11.9"
 spin = "0.10.0"
-x86_64 = "0.15.2"
-uart_16550 = "0.3.2"
+
+[dependencies.bootloader_api]
+version = "0.11.9"
+optional = true
+
+[dependencies.x86_64]
+version = "0.15.2"
+optional = true
+
+[dependencies.uart_16550]
+version = "0.3.2"
+optional = true
 
 [features]
 default = ["arch_x86_64"]
-arch_x86_64 = []
+arch_x86_64 = ["dep:bootloader_api", "dep:x86_64", "dep:uart_16550"]
 arch_aarch64 = []

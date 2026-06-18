@@ -1,7 +1,7 @@
 //! Simple software-rendered window compositor.
 
 use super::color::{blend, Color};
-use bootloader_api::info::{FrameBufferInfo, PixelFormat};
+use crate::boot_info::{FrameBufferInfo, PixelFormat};
 
 /// Opaque window handle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -155,7 +155,6 @@ impl Compositor {
                 pixel[(blue_position as usize / 8).min(3)] = color.b;
                 pixel
             }
-            _ => [color.r, color.g, color.b, 0],
         };
         let buf = unsafe { core::slice::from_raw_parts_mut(self.buffer, self.buffer_len) };
         buf[offset..offset + bytes_per_pixel].copy_from_slice(&bytes[..bytes_per_pixel]);
