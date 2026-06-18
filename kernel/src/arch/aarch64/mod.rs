@@ -1,5 +1,7 @@
 //! AArch64 hardware abstraction layer (stub for cross-architecture build).
 
+pub mod context_switch;
+
 /// Initialize AArch64-specific hardware.
 pub fn init() {
     // TODO: configure GIC, timers, MMU.

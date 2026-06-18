@@ -2,6 +2,7 @@
 
 use x86_64::instructions::port::Port;
 
+pub mod context_switch;
 pub mod interrupts;
 
 /// Initialize x86_64-specific hardware.

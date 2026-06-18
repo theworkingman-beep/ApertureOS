@@ -20,6 +20,7 @@ pub mod nt;
 pub mod objects;
 pub mod process;
 pub mod registry;
+pub mod scheduler;
 pub mod thread;
 pub mod win32k;
 
@@ -68,4 +69,20 @@ pub fn self_test() {
         proc.entry_point,
         needs_translation
     );
+
+    let slot = scheduler::create_thread(proc.pid, proc.entry_point)
+        .expect("create initial thread for loaded process");
+    let thread = scheduler::thread(slot).expect("scheduled thread");
+    crate::logln!(
+        "win32: scheduling thread tid={} entry={:#x} slot={}",
+        thread.tid,
+        thread.entry_point,
+        slot
+    );
+
+    unsafe {
+        scheduler::schedule();
+    }
+
+    crate::logln!("win32: returned to idle after scheduling.");
 }
