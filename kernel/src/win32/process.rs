@@ -8,6 +8,10 @@ pub struct Process {
     pub peb_base: u64,
     pub teb_base: u64,
     pub root_handle: Handle,
+    /// Base address where the PE image is mapped.
+    pub image_base: u64,
+    /// Size of the mapped PE image.
+    pub image_size: u64,
 }
 
 impl Process {
@@ -17,6 +21,8 @@ impl Process {
             peb_base: 0,
             teb_base: 0,
             root_handle: Handle(0),
+            image_base: 0,
+            image_size: 0,
         }
     }
 }
