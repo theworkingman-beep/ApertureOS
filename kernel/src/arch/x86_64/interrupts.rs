@@ -31,8 +31,8 @@ pub fn init() {
             .set_stack_index(1);
         IDT.page_fault.set_handler_fn(page_fault_handler);
 
-        // IRQ0: timer
-        IDT[32].set_handler_fn(timer_interrupt_handler);
+        // IRQ0: timer uses a raw handler that performs preemptive scheduling.
+        IDT[32].set_handler_addr(x86_64::VirtAddr::new(timer_interrupt_handler as *const () as u64));
         // IRQ1: keyboard
         IDT[33].set_handler_fn(keyboard_interrupt_handler);
 
@@ -159,11 +159,78 @@ extern "x86-interrupt" fn page_fault_handler(
     crate::logln!("PAGE FAULT at {:#x}: {:#?} {:#?}", addr, error_code, stack_frame);
 }
 
-extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
-    unsafe {
-        let mut pic1_command: Port<u8> = Port::new(PIC1_COMMAND);
-        pic1_command.write(PIC_EOI);
-    }
+/// Naked timer interrupt handler.
+///
+/// On entry the CPU has pushed RIP, CS, and RFLAGS onto the interrupt stack.
+/// If the interrupt arrived from ring 3, it also pushed RSP and SS. We check
+/// the saved CS to decide whether to preempt; kernel-mode interrupts simply
+/// acknowledge the PIC and return.
+#[cfg(feature = "arch_x86_64")]
+#[unsafe(naked)]
+unsafe extern "C" fn timer_interrupt_handler() {
+    core::arch::naked_asm!(
+        // [rsp + 0]  = saved RIP
+        // [rsp + 8]  = saved CS (CPL in low 2 bits)
+        "mov rax, [rsp + 8]",
+        "and rax, 3",
+        "cmp rax, 3",
+        "jne 2f",
+
+        // Came from ring 3: save all general-purpose registers above the
+        // CPU-pushed interrupt frame.
+        "push r15",
+        "push r14",
+        "push r13",
+        "push r12",
+        "push r11",
+        "push r10",
+        "push r9",
+        "push r8",
+        "push rbp",
+        "push rdi",
+        "push rsi",
+        "push rbx",
+        "push rdx",
+        "push rcx",
+        "push rax",
+
+        // RSP now points to the saved register frame. Ask the scheduler to
+        // pick the next thread and return its interrupt frame pointer.
+        "mov rdi, rsp",
+        "call {preempt}",
+        "mov rsp, rax",
+
+        // Restore the new thread's general-purpose registers.
+        "pop rax",
+        "pop rcx",
+        "pop rdx",
+        "pop rbx",
+        "pop rsi",
+        "pop rdi",
+        "pop rbp",
+        "pop r8",
+        "pop r9",
+        "pop r10",
+        "pop r11",
+        "pop r12",
+        "pop r13",
+        "pop r14",
+        "pop r15",
+
+        // Acknowledge the PIC and return to the selected thread.
+        "mov al, {eoi}",
+        "out {pic1_command}, al",
+        "iretq",
+
+        "2:",
+        "mov al, {eoi}",
+        "out {pic1_command}, al",
+        "iretq",
+
+        preempt = sym crate::win32::scheduler::preempt,
+        eoi = const PIC_EOI,
+        pic1_command = const PIC1_COMMAND,
+    );
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {

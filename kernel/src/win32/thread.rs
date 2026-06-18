@@ -53,6 +53,8 @@ pub struct Thread {
     pub state: ThreadState,
     /// Guest x86_64 general-purpose registers, used by the interpreter.
     pub regs: [u64; 16],
+    /// Kernel RSP captured when the thread was preempted by a timer interrupt.
+    pub interrupt_rsp: u64,
 }
 
 impl Thread {
@@ -79,6 +81,7 @@ impl Thread {
             process_page_table_root: 0,
             state: ThreadState::Ready,
             regs: [0; 16],
+            interrupt_rsp: 0,
         }
     }
 }

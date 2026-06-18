@@ -139,6 +139,54 @@ where
     Some(f(t))
 }
 
+/// Called from the x86_64 timer interrupt handler with the current kernel
+/// stack pointer. Saves it as the interrupted thread's interrupt frame,
+/// selects the next ready thread, and returns the new thread's interrupt
+/// frame pointer.
+///
+/// If no other runnable preempted thread exists, the current frame is
+/// returned so execution resumes immediately.
+#[cfg(feature = "arch_x86_64")]
+#[no_mangle]
+pub extern "C" fn preempt(interrupt_rsp: u64) -> u64 {
+    let current_slot = *CURRENT_THREAD.lock();
+    if let Some(slot) = current_slot {
+        if let Some(cur) = thread_mut(slot) {
+            if cur.state != ThreadState::Exited {
+                cur.interrupt_rsp = interrupt_rsp;
+                cur.state = ThreadState::Ready;
+                let _ = enqueue_thread(slot);
+            }
+        }
+    }
+
+    let Some(next_slot) = dequeue_thread() else {
+        return interrupt_rsp;
+    };
+
+    let Some(next) = thread_mut(next_slot) else {
+        return interrupt_rsp;
+    };
+
+    // A thread that has never entered user mode has no saved interrupt frame,
+    // so we cannot IRETQ to it from here. Put it back and keep running the
+    // current context.
+    if next.interrupt_rsp == 0 {
+        let _ = enqueue_thread(next_slot);
+        return interrupt_rsp;
+    }
+
+    next.state = ThreadState::Running;
+    *CURRENT_THREAD.lock() = Some(next_slot);
+
+    let kstack_top = next.stack_base + crate::arch::context_switch::stack_size() as u64;
+    unsafe {
+        crate::arch::x86_64::gdt::set_rsp0(kstack_top);
+    }
+
+    next.interrupt_rsp
+}
+
 /// Start running `slot` under the x86_64 interpreter.
 ///
 /// # Safety
@@ -213,11 +261,15 @@ pub unsafe fn enter_user_mode(slot: usize) -> ! {
         core::arch::asm!(
             "mov cr3, {cr3}",
             cr3 = in(reg) cr3,
+            options(nostack, preserves_flags),
         );
     }
 
     let kstack_top = t.stack_base + crate::arch::context_switch::stack_size() as u64;
     crate::arch::x86_64::syscall::set_syscall_rsp(kstack_top);
+    unsafe {
+        crate::arch::x86_64::gdt::set_rsp0(kstack_top);
+    }
 
     // Push a return address onto the user stack so that when the PE's entry
     // function returns it lands in thread_exit instead of jumping to garbage.

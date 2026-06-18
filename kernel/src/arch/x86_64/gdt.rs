@@ -76,3 +76,17 @@ pub unsafe fn init() {
 
     load_tss(tss_selector);
 }
+
+/// Update the TSS ring-0 stack pointer to `rsp`.
+///
+/// This is called before entering user mode and whenever the scheduler
+/// switches to a different thread, so that interrupts always arrive on the
+/// current thread's kernel stack.
+///
+/// # Safety
+/// `rsp` must point to valid writable memory within the current thread's
+/// kernel stack.
+pub unsafe fn set_rsp0(rsp: u64) {
+    let tss_ptr = core::ptr::addr_of!(TSS) as *mut TaskStateSegment;
+    (*tss_ptr).privilege_stack_table[0] = x86_64::VirtAddr::new(rsp);
+}
