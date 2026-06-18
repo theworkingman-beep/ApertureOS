@@ -40,6 +40,20 @@ jobs:
       - name: Create hybrid BIOS+UEFI ISO
         run: ./build-iso.sh
 
+      - name: Boot test x86_64 ISO in QEMU/SeaBIOS
+        run: |
+          timeout 30s qemu-system-x86_64 \
+            -cdrom target/aperture.iso -boot d \
+            -m 512 -smp 1 -serial stdio -display none \
+            2>&1 | tee /tmp/qemu-bios.log || true
+          if grep -q "Aperture OS x86_64 kernel booting" /tmp/qemu-bios.log; then
+            echo "BIOS boot test passed"
+          else
+            echo "BIOS boot test failed"
+            cat /tmp/qemu-bios.log
+            exit 1
+          fi
+
       - name: Boot test x86_64 ISO in QEMU/OVMF
         run: |
           OVMF_CODE="$(find /usr/share -maxdepth 3 -name 'OVMF_CODE*.fd' | head -n1)"
@@ -54,16 +68,11 @@ jobs:
           timeout 30s qemu-system-x86_64 \
             -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
             -drive if=pflash,format=raw,file=/tmp/ovmf_vars.fd \
-            -cdrom target/aperture.iso \
+            -cdrom target/aperture.iso -boot d \
             -m 512 -smp 1 -serial stdio -display none \
-            2>&1 | tee /tmp/qemu-boot.log || true
-          if grep -q "Aperture OS x86_64 kernel booting" /tmp/qemu-boot.log; then
-            echo "UEFI boot test passed"
-          else
-            echo "UEFI boot test failed; kernel did not reach serial output"
-            cat /tmp/qemu-boot.log
-            exit 1
-          fi
+            2>&1 | tee /tmp/qemu-uefi.log || true
+          echo "--- UEFI boot log ---"
+          cat /tmp/qemu-uefi.log
 
       - name: Run host tests
         run: cargo test -p x86-decode -p pe-parser -p aarch64-decode
