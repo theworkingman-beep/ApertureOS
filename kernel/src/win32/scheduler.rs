@@ -185,6 +185,13 @@ pub unsafe fn enter_user_mode(slot: usize) -> ! {
     let kstack_top = t.stack_base + crate::arch::context_switch::stack_size() as u64;
     crate::arch::x86_64::syscall::set_syscall_rsp(kstack_top);
 
+    // Push a return address onto the user stack so that when the PE's entry
+    // function returns it lands in thread_exit instead of jumping to garbage.
+    let user_rsp = user_rsp.wrapping_sub(core::mem::size_of::<u64>() as u64);
+    unsafe {
+        core::ptr::write(user_rsp as *mut u64, thread_exit as *const () as u64);
+    }
+
     crate::arch::x86_64::syscall::sysret_to_user(user_rip, user_rsp);
 }
 

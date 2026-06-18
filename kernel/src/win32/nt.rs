@@ -135,10 +135,12 @@ fn handle_close(args: [usize; 16]) -> NtStatus {
 }
 
 fn handle_allocate_virtual_memory(args: [usize; 16]) -> NtStatus {
-    let size = args[1];
+    // Windows x64 ABI: RDI=handle, RSI=BaseAddress pointer, RDX=ZeroBits,
+    // R10=RegionSize pointer/value, R8=AllocationType, R9=Protect.
+    let size = args[3];
     match allocate_virtual_memory(size) {
         Ok(base) => {
-            let base_ptr = args[0] as *mut u64;
+            let base_ptr = args[1] as *mut u64;
             if !base_ptr.is_null() {
                 unsafe { base_ptr.write(base); }
             }
