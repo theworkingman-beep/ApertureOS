@@ -3,11 +3,15 @@
 use x86_64::instructions::port::Port;
 
 pub mod context_switch;
+pub mod gdt;
 pub mod interrupts;
 pub mod syscall;
 
 /// Initialize x86_64-specific hardware.
 pub fn init() {
+    unsafe {
+        gdt::init();
+    }
     interrupts::init();
     unsafe {
         syscall::init();

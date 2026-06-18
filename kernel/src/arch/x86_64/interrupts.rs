@@ -26,7 +26,9 @@ static mut KEYBOARD_TAIL: usize = 0;
 pub fn init() {
     unsafe {
         IDT.breakpoint.set_handler_fn(breakpoint_handler);
-        IDT.double_fault.set_handler_fn(double_fault_handler);
+        IDT.double_fault
+            .set_handler_fn(double_fault_handler)
+            .set_stack_index(1);
         IDT.page_fault.set_handler_fn(page_fault_handler);
 
         // IRQ0: timer

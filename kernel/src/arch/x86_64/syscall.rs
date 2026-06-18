@@ -6,8 +6,6 @@
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use x86_64::registers::model_specific::{Efer, EferFlags, LStar, Star};
-use x86_64::registers::segmentation::SegmentSelector;
-use x86_64::PrivilegeLevel;
 
 /// Top of the kernel stack to use when a SYSCALL arrives from ring-3.
 ///
@@ -27,11 +25,16 @@ pub fn set_syscall_rsp(rsp: u64) {
 /// supervisor stack. Enabling `syscall`/`sysret` without correct segment and
 /// stack setup can crash the system.
 pub unsafe fn init() {
-    let syscall_cs = SegmentSelector::new(1, PrivilegeLevel::Ring0);
-    let syscall_ss = SegmentSelector::new(2, PrivilegeLevel::Ring0);
-    let sysret_cs = SegmentSelector::new(3, PrivilegeLevel::Ring3);
-    let sysret_ss = SegmentSelector::new(4, PrivilegeLevel::Ring3);
-    let _ = Star::write(sysret_cs, sysret_ss, syscall_cs, syscall_ss);
+    let selectors = crate::arch::x86_64::gdt::selectors();
+    // STAR layout: bits 32..48 = SYSRET CS, bits 48..64 = SYSCALL CS.
+    // The CPU computes SS = CS + 8, so the selectors must be laid out
+    // accordingly in the GDT.
+    let _ = Star::write(
+        selectors.user_code,
+        selectors.user_data,
+        selectors.kernel_code,
+        selectors.kernel_data,
+    );
     LStar::write(x86_64::VirtAddr::new(syscall_entry as *const () as u64));
     Efer::update(|efer| {
         efer.insert(EferFlags::SYSTEM_CALL_EXTENSIONS);
