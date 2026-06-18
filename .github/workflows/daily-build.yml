@@ -42,9 +42,17 @@ jobs:
 
       - name: Boot test x86_64 ISO in QEMU/OVMF
         run: |
-          cp /usr/share/OVMF/OVMF_VARS.fd /tmp/ovmf_vars.fd
+          OVMF_CODE="$(find /usr/share -maxdepth 3 -name 'OVMF_CODE*.fd' | head -n1)"
+          OVMF_VARS="$(find /usr/share -maxdepth 3 -name 'OVMF_VARS*.fd' | head -n1)"
+          echo "OVMF code: $OVMF_CODE"
+          echo "OVMF vars: $OVMF_VARS"
+          if [[ -z "$OVMF_CODE" || -z "$OVMF_VARS" ]]; then
+            echo "Could not locate OVMF pflash files."
+            exit 1
+          fi
+          cp "$OVMF_VARS" /tmp/ovmf_vars.fd
           timeout 30s qemu-system-x86_64 \
-            -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE.fd \
+            -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
             -drive if=pflash,format=raw,file=/tmp/ovmf_vars.fd \
             -cdrom target/aperture.iso \
             -m 512 -smp 1 -serial stdio -display none \
