@@ -37,6 +37,7 @@ mod x86_64_entry {
         }
         unsafe {
             kernel::mm::init_physical_allocator(&regions[..region_count]);
+            kernel::mm::page_table::capture_kernel_page_table();
         }
         kernel::logln!("Physical frame allocator initialized.");
 

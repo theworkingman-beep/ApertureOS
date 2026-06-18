@@ -12,18 +12,53 @@ mod x86_64_impl {
     const PAGE_WRITABLE: u64 = 1 << 1;
     const PAGE_USER: u64 = 1 << 2;
 
+    // Kernel higher-half PML4 entry index. The bootloader identity-maps the
+    // kernel at low addresses, but we also keep the kernel visible in every
+    // process by sharing the highest PML4 entry (entry 511).
+    /// Physical address of the kernel's top-level page table, captured once
+    /// during early initialization.
+    static mut KERNEL_CR3: u64 = 0;
+
+    /// Capture the currently active top-level page table.
+    ///
+    /// # Safety
+    /// Must be called exactly once during early boot while the bootloader's
+    /// page tables are still active.
+    pub unsafe fn capture_kernel_page_table() {
+        let value: u64;
+        core::arch::asm!("mov {0}, cr3", out(reg) value);
+        KERNEL_CR3 = value;
+    }
+
     /// A top-level page table for the 4-level x86_64 MMU.
     pub struct PageTable {
-        root: u64,
+        pub root: u64,
     }
 
     impl PageTable {
-        /// Allocate and zero a new top-level page table.
+        /// Allocate and zero a new top-level page table, sharing the kernel's
+        /// higher-half mapping so that system calls can access kernel code and
+        /// data without switching CR3.
         pub fn new() -> Option<Self> {
             let root = frame_allocator::allocate()?;
             unsafe {
                 core::ptr::write_bytes(root as *mut u8, 0, 4096);
             }
+
+            // Copy the entire kernel page table into the new top-level table.
+            // This keeps the kernel mapped in every process while allowing the
+            // lower half to be replaced with per-process user mappings. A real
+            // implementation will switch to a proper higher-half shared entry.
+            if unsafe { KERNEL_CR3 } != 0 {
+                unsafe {
+                    let src = KERNEL_CR3 as *const u64;
+                    let dst = root as *mut u64;
+                    for i in 0..512 {
+                        dst.add(i).write(src.add(i).read());
+                    }
+                }
+            }
+
             Some(Self { root })
         }
 
@@ -50,6 +85,20 @@ mod x86_64_impl {
             let entries = pt as *mut u64;
             let entry = entries.add(pt_index);
             entry.write(phys | flags | PAGE_PRESENT);
+            true
+        }
+
+        /// Map `pages` contiguous physical frames starting at `phys_base` to
+        /// `virt_base`, using `flags` for each 4 KiB page.
+        ///
+        /// # Safety
+        /// The virtual range must not already be mapped.
+        pub unsafe fn map_region(&mut self, virt_base: u64, phys_base: u64, pages: usize, flags: u64) -> bool {
+            for i in 0..pages as u64 {
+                if !self.map(virt_base + i * 4096, phys_base + i * 4096, flags) {
+                    return false;
+                }
+            }
             true
         }
 
@@ -81,10 +130,25 @@ mod x86_64_impl {
 }
 
 #[cfg(feature = "arch_x86_64")]
-pub use x86_64_impl::PageTable;
+pub use x86_64_impl::{capture_kernel_page_table, PageTable};
+
+/// Return a mutable reference to the page table rooted at physical address
+/// `cr3`. This is a debug/utility helper that treats the physical address as
+/// identity-mapped.
+///
+/// # Safety
+/// `cr3` must be a valid, identity-mapped top-level page table.
+pub unsafe fn page_table_root(cr3: u64) -> Option<PageTable> {
+    if cr3 == 0 {
+        return None;
+    }
+    Some(PageTable { root: cr3 })
+}
 
 #[cfg(feature = "arch_aarch64")]
-pub struct PageTable;
+pub struct PageTable {
+    pub root: u64,
+}
 
 #[cfg(feature = "arch_aarch64")]
 impl PageTable {
@@ -96,8 +160,12 @@ impl PageTable {
         false
     }
 
+    pub unsafe fn map_region(&mut self, _virt: u64, _phys: u64, _pages: usize, _flags: u64) -> bool {
+        false
+    }
+
     pub fn cr3(&self) -> u64 {
-        0
+        self.root
     }
 }
 

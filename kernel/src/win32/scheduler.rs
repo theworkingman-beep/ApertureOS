@@ -5,6 +5,7 @@
 //! and the ready queue holds indices into that array.
 
 use super::thread::{Thread, ThreadState};
+use crate::mm::page_table::{page_table_root, PAGE_PRESENT, PAGE_USER, PAGE_WRITABLE};
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
@@ -38,7 +39,7 @@ fn alloc_thread_slot() -> Option<usize> {
 pub fn create_thread(
     pid: u64,
     entry_point: u64,
-    page_table_root: u64,
+    cr3: u64,
 ) -> Option<usize> {
     let slot = alloc_thread_slot()?;
 
@@ -48,9 +49,18 @@ pub fn create_thread(
     let kstack_top = kstack_base + kstack_size as u64;
     let initial_rsp = crate::arch::context_switch::initial_stack(entry_point, kstack_top);
 
-    // User stack used when the thread runs in ring-3.
-    let ustack_base = crate::mm::alloc_early(USER_STACK_SIZE, 16)? as u64;
-    let ustack_top = ustack_base + USER_STACK_SIZE as u64;
+    // User stack used when the thread runs in ring-3. Map it at a fixed
+    // virtual address in the per-process page table.
+    const USER_STACK_VIRT: u64 = 0x0000_0000_0007_0000;
+    let ustack_base = crate::mm::alloc_early(USER_STACK_SIZE, 4096)? as u64;
+    let ustack_top = USER_STACK_VIRT + USER_STACK_SIZE as u64;
+    if let Some(mut pt) = unsafe { page_table_root(cr3) } {
+        let pages = USER_STACK_SIZE / 4096;
+        let flags = PAGE_PRESENT | PAGE_USER | PAGE_WRITABLE;
+        unsafe {
+            pt.map_region(USER_STACK_VIRT, ustack_base, pages, flags);
+        }
+    }
 
     let tid = NEXT_TID.fetch_add(1, Ordering::Relaxed);
     let mut thread = Thread::new(tid, pid, entry_point);
@@ -58,7 +68,7 @@ pub fn create_thread(
     thread.stack_limit = kstack_base;
     thread.rsp = initial_rsp;
     thread.user_rsp = ustack_top;
-    thread.process_page_table_root = page_table_root;
+    thread.process_page_table_root = cr3;
     thread.state = ThreadState::Ready;
 
     unsafe {
