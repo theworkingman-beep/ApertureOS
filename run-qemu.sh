@@ -3,8 +3,6 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-cargo run -p bootloader
-
 UEFI_IMAGE="target/aperture-uefi.img"
 BIOS_IMAGE="target/aperture-bios.img"
 
