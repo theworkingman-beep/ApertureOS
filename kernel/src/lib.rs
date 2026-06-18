@@ -8,6 +8,7 @@ pub mod gui;
 pub mod logger;
 pub mod mm;
 pub mod panic;
+pub mod vfs;
 pub mod win32;
 
 /// Kernel initialization entry common to all architectures.
@@ -15,7 +16,9 @@ pub fn init() {
     logger::init();
     arch::init();
     mm::init();
+    vfs::init();
     gui::init();
+    win32::init();
 }
 
 /// Halt the CPU forever.
