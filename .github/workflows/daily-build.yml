@@ -4,11 +4,8 @@ on:
   # Run every day at 06:00 UTC.
   schedule:
     - cron: '0 6 * * *'
-  # Also run on every push and pull request to main.
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  # Allow manual trigger.
+  workflow_dispatch:
 
 permissions:
   contents: write
