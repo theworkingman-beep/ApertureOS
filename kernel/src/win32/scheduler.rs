@@ -11,6 +11,7 @@ use spin::Mutex;
 
 const MAX_THREADS: usize = 16;
 const MAX_READY: usize = MAX_THREADS;
+const USER_STACK_SIZE: usize = 64 * 1024; // 64 KiB user stacks
 
 // Static, pinned storage for thread control blocks. The usage bitmap is
 // protected by a separate Mutex so we can hand out &'static mut references.
@@ -29,20 +30,35 @@ fn alloc_thread_slot() -> Option<usize> {
     used.iter().position(|&in_use| !in_use)
 }
 
-/// Create a new ready thread starting at `entry_point` with a freshly
-/// allocated stack.
-pub fn create_thread(pid: u64, entry_point: u64) -> Option<usize> {
+/// Create a new thread for `pid` starting at `entry_point`.
+///
+/// The thread owns both a kernel stack (for scheduler context) and a user stack
+/// (for ring-3 execution). `page_table_root` is the physical CR3 value that
+/// must be loaded before this thread runs natively.
+pub fn create_thread(
+    pid: u64,
+    entry_point: u64,
+    page_table_root: u64,
+) -> Option<usize> {
     let slot = alloc_thread_slot()?;
-    let stack_size = crate::arch::context_switch::stack_size();
-    let stack_base = crate::mm::alloc_early(stack_size, 16)? as u64;
-    let stack_top = stack_base + stack_size as u64;
-    let initial_rsp = crate::arch::context_switch::initial_stack(entry_point, stack_top);
+
+    // Kernel stack used for cooperative context switching inside the kernel.
+    let kstack_size = crate::arch::context_switch::stack_size();
+    let kstack_base = crate::mm::alloc_early(kstack_size, 16)? as u64;
+    let kstack_top = kstack_base + kstack_size as u64;
+    let initial_rsp = crate::arch::context_switch::initial_stack(entry_point, kstack_top);
+
+    // User stack used when the thread runs in ring-3.
+    let ustack_base = crate::mm::alloc_early(USER_STACK_SIZE, 16)? as u64;
+    let ustack_top = ustack_base + USER_STACK_SIZE as u64;
 
     let tid = NEXT_TID.fetch_add(1, Ordering::Relaxed);
     let mut thread = Thread::new(tid, pid, entry_point);
-    thread.stack_base = stack_base;
-    thread.stack_limit = stack_base;
+    thread.stack_base = kstack_base;
+    thread.stack_limit = kstack_base;
     thread.rsp = initial_rsp;
+    thread.user_rsp = ustack_top;
+    thread.process_page_table_root = page_table_root;
     thread.state = ThreadState::Ready;
 
     unsafe {
@@ -127,6 +143,36 @@ pub unsafe fn schedule() {
     *CURRENT_THREAD.lock() = Some(next_slot);
 
     crate::arch::context_switch::switch(old_rsp, new_rsp);
+}
+
+/// Enter ring-3 for the first time by running `slot` with its per-process page
+/// table and user stack.
+///
+/// # Safety
+/// Must only be used to start a process's initial thread. Does not return on
+/// success; the SYSCALL handler is responsible for re-entering the kernel.
+#[cfg(feature = "arch_x86_64")]
+pub unsafe fn enter_user_mode(slot: usize) -> ! {
+    let Some(t) = thread_mut(slot) else {
+        crate::logln!("scheduler: cannot enter user mode for missing slot {}", slot);
+        crate::hlt();
+    };
+
+    t.state = ThreadState::Running;
+    *CURRENT_THREAD.lock() = Some(slot);
+
+    let cr3 = t.process_page_table_root;
+    let user_rip = t.user_rip;
+    let user_rsp = t.user_rsp;
+
+    if cr3 != 0 {
+        core::arch::asm!(
+            "mov cr3, {cr3}",
+            cr3 = in(reg) cr3,
+        );
+    }
+
+    crate::arch::x86_64::syscall::sysret_to_user(user_rip, user_rsp);
 }
 
 /// Entry point placed on every new thread stack. Called if a thread function

@@ -26,6 +26,22 @@ pub unsafe fn init() {
     });
 }
 
+/// Return to ring-3 using SYSRET with the given RIP and RSP.
+///
+/// # Safety
+/// Must only be called from kernel mode with valid ring-3 selectors and a
+/// valid user stack. Does not return.
+#[cfg(feature = "arch_x86_64")]
+#[unsafe(naked)]
+pub unsafe extern "C" fn sysret_to_user(rip: u64, rsp: u64) -> ! {
+    core::arch::naked_asm!(
+        "mov rsp, rsi",   // user RSP
+        "mov rcx, rdi",   // user RIP -> RCX for sysret
+        "mov r11, 0x202", // user RFLAGS (IF set)
+        "sysretq",
+    );
+}
+
 /// Naked entry point for SYSCALL.
 ///
 /// On entry:

@@ -77,56 +77,22 @@ pub fn self_test() {
             abi::interpreter::run_x86_64_loop(proc.entry_point);
         }
     } else {
-        let slot = scheduler::create_thread(proc.pid, proc.entry_point)
+        let slot = scheduler::create_thread(proc.pid, proc.entry_point, proc.page_table_root)
             .expect("create initial thread for loaded process");
         let thread = scheduler::thread(slot).expect("scheduled thread");
         crate::logln!(
-            "win32: scheduling thread tid={} entry={:#x} slot={}",
+            "win32: entering user mode for thread tid={} entry={:#x} slot={} cr3={:#x}",
             thread.tid,
             thread.entry_point,
-            slot
+            slot,
+            thread.process_page_table_root
         );
 
+        #[cfg(feature = "arch_x86_64")]
         unsafe {
-            scheduler::schedule();
+            scheduler::enter_user_mode(slot);
         }
-
-        crate::logln!("win32: returned to idle after scheduling.");
+        #[cfg(not(feature = "arch_x86_64"))]
+        crate::hlt();
     }
-
-    // Exercise the in-kernel NT syscall dispatch table directly (without a
-    // real user-mode trap) to confirm the implementation functions.
-    let mut base = 0u64;
-    let status = nt::dispatch(
-        nt::SyscallNumber::NtAllocateVirtualMemory,
-        [
-            &mut base as *mut u64 as usize,
-            0x1000,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-        ],
-    );
-    crate::logln!(
-        "win32: NtAllocateVirtualMemory dispatch status={:#x} base={:#x}",
-        status as u32,
-        base
-    );
-
-    let status = nt::dispatch(nt::SyscallNumber::NtClose, [0; 16]);
-    crate::logln!("win32: NtClose(0) dispatch status={:#x}", status as u32);
-
-    let status = nt::dispatch(nt::SyscallNumber::NtCreateFile, [0; 16]);
-    crate::logln!("win32: NtCreateFile dispatch status={:#x}", status as u32);
 }
