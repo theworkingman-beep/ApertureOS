@@ -22,6 +22,8 @@ case "$ARCH" in
 esac
 
 echo "Building Aperture OS kernel for $ARCH..."
+# The x86_64 kernel uses naked assembly that references static symbols; the
+# large code model prevents R_X86_64_32S linker relocations in that context.
 cargo build -p kernel --no-default-features --features "$FEATURES" \
     -Z build-std=core,compiler_builtins,alloc \
     -Z build-std-features=compiler-builtins-mem \

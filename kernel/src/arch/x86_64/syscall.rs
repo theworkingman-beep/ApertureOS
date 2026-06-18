@@ -4,9 +4,21 @@
 //! register state and dispatches the NT syscall. This is the kernel side of the
 //! trap; user-mode code executes `syscall` with the syscall number in RAX.
 
+use core::sync::atomic::{AtomicU64, Ordering};
 use x86_64::registers::model_specific::{Efer, EferFlags, LStar, Star};
 use x86_64::registers::segmentation::SegmentSelector;
 use x86_64::PrivilegeLevel;
+
+/// Top of the kernel stack to use when a SYSCALL arrives from ring-3.
+///
+/// The scheduler updates this to the current thread's kernel stack before
+/// entering user mode. Single-core bring-up only; on SMP this must be per-CPU.
+static SYSCALL_RSP: AtomicU64 = AtomicU64::new(0);
+
+/// Set the kernel stack pointer that SYSCALL will use for this thread.
+pub fn set_syscall_rsp(rsp: u64) {
+    SYSCALL_RSP.store(rsp, Ordering::Relaxed);
+}
 
 /// Initialize the SYSCALL machinery.
 ///
@@ -50,25 +62,32 @@ pub unsafe extern "C" fn sysret_to_user(rip: u64, rsp: u64) -> ! {
 ///   R11 = user-mode RFLAGS
 ///   RDI, RSI, RDX, R10, R8, R9 = arguments
 ///
-/// We save the remaining registers, build a 16-element argument array on the
-/// stack, call the NT dispatch, restore registers, and SYSRET back to RCX/R11.
+/// We save the remaining registers on the kernel stack pointed to by
+/// SYSCALL_RSP, build a 16-element argument array, call the NT dispatch,
+/// restore registers, and SYSRET back to RCX/R11.
 #[cfg(feature = "arch_x86_64")]
 #[unsafe(naked)]
 pub unsafe extern "C" fn syscall_entry() {
     core::arch::naked_asm!(
+        // Stash user RSP (RSP is still the user stack) in r12 so we can
+        // restore it before SYSRET.
+        "mov r12, rsp",
+        // Switch to the kernel SYSCALL stack. The address of SYSCALL_RSP is a
+        // static in the kernel image; load it with a RIP-relative LEA and then
+        // read the stored value.
+        "lea r13, [rip + {syscall_rsp} - 7]",
+        "mov rsp, [r13]",
         "push rbp",
         "push rbx",
-        "push r12",
         "push r13",
         "push r14",
         "push r15",
-        // Build args[0..6] from ABI registers.
-        "mov r12, rdi",          // r12 = arg0
-        "mov r13, rsi",          // r13 = arg1
-        // rdx = arg2, r10 = arg3, r8 = arg4, r9 = arg5
-        // Allocate stack space for 16 qwords.
+        "push r12",          // user RSP
+        // Build args[0..6] from ABI registers before we overwrite them.
+        "mov r13, rsi",      // r13 = arg1
+        // rdi = arg0, rdx = arg2, r10 = arg3, r8 = arg4, r9 = arg5
         "sub rsp, 128",
-        "mov [rsp + 0*8], r12",
+        "mov [rsp + 0*8], rdi",
         "mov [rsp + 1*8], r13",
         "mov [rsp + 2*8], rdx",
         "mov [rsp + 3*8], r10",
@@ -90,13 +109,15 @@ pub unsafe extern "C" fn syscall_entry() {
         "mov rsi, rsp",
         "call {dispatch}",
         "add rsp, 128",
+        "pop r12",           // user RSP
         "pop r15",
         "pop r14",
         "pop r13",
-        "pop r12",
         "pop rbx",
         "pop rbp",
+        "mov rsp, r12",
         "sysretq",
+        syscall_rsp = sym SYSCALL_RSP,
         dispatch = sym crate::win32::nt::dispatch,
     );
 }

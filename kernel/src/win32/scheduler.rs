@@ -182,6 +182,9 @@ pub unsafe fn enter_user_mode(slot: usize) -> ! {
         );
     }
 
+    let kstack_top = t.stack_base + crate::arch::context_switch::stack_size() as u64;
+    crate::arch::x86_64::syscall::set_syscall_rsp(kstack_top);
+
     crate::arch::x86_64::syscall::sysret_to_user(user_rip, user_rsp);
 }
 
